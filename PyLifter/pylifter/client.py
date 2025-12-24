@@ -16,7 +16,8 @@ class PyLifterClient:
         self._passkey: Optional[bytes] = bytes.fromhex(passkey) if passkey else None
         self._client: Optional[BleakClient] = None
         self._auth_event = asyncio.Event()
-
+        self._write_lock = asyncio.Lock() # Serialize GATT writes
+        
         self._notification_callbacks = []
         self._notification_callbacks = []
         self._stats_future: Optional[asyncio.Future] = None
@@ -128,29 +129,42 @@ class PyLifterClient:
                     avg_pos=pos
                 )
                 
-                try:
-                    # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
-                    await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
-                except Exception as e:
-                    err_str = str(e)
-                    if "Service Discovery" in err_str:
-                        # Transient startup error or connection loss.
-                        service_fail_count += 1
-                        if service_fail_count > 5:
-                            logger.error(f"Keep-Alive Stopped (Max Retries): {err_str}")
-                            self._is_connected = False
-                            break
+                if self._client and self._client.is_connected:
+                    try:
+                        # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
+                        
+                        # Only send if lock is available (don't block keep-alive on long ops)
+                        if not self._write_lock.locked():
+                            async with self._write_lock:
+                                await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+                            service_fail_count = 0 # Reset on successful write
+                            
+                    except Exception as e:
+                        err_str = str(e)
+                        if "Service Discovery" in err_str:
+                            # Transient startup error or connection loss.
+                            service_fail_count += 1
+                            if service_fail_count > 5:
+                                logger.error(f"Keep-Alive Stopped (Max Retries): {err_str}")
+                                self._is_connected = False
+                                break
+                            else:
+                                logger.warning(f"Keep-Alive Service Discovery Error - Reconnecting (Attempt {service_fail_count}/5)...")
+                                try:
+                                    # Attempt transparent reconnection
+                                    await self._establish_connection()
+                                    logger.info("Transparent Reconnection Successful.")
+                                    service_fail_count = 0 # Reset counter
+                                    continue # Resume loop immediately
+                                except Exception as rec_err:
+                                    logger.error(f"Reconnection Attempt Failed: {rec_err}")
+                                    await asyncio.sleep(1.0)
+                                    continue
                         else:
-                            logger.warning(f"Keep-Alive Service Discovery Error (Retry {service_fail_count}/5)...")
-                            await asyncio.sleep(1.0) # Wait for stack to recover
-                            continue
-                    else:
-                        service_fail_count = 0 # Reset on successful write (or other error)
-
-                    # For other errors, just warn and retry (transient glitch)
-                    logger.warning(f"Keep-Alive Write Failed: {e}")
+                            # For other errors, just warn
+                             logger.warning(f"Keep-Alive Write Failed: {e}")
                 
-                await asyncio.sleep(0.1) # 10Hz - Safe for Sync
+                await asyncio.sleep(0.25) # 4Hz - Reduced from 10Hz to prevent congestion
                     
         except asyncio.CancelledError:
             pass
@@ -381,12 +395,14 @@ class PyLifterClient:
     async def set_smart_point(self, point: SmartPointCode):
         logger.info(f"Setting Smart Point: {point.name} ({point.value})...")
         packet = build_packet(CommandCode.CALIBRATE, struct.pack("B", point.value))
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        async with self._write_lock:
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
 
     async def clear_smart_point(self, point: SmartPointCode):
         logger.info(f"Clearing Smart Point: {point.name} ({point.value})...")
         packet = build_clear_smart_point_packet(point)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        async with self._write_lock:
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
         
     async def override_move(self, direction: MoveCode, speed: int = 100):
         """
@@ -395,24 +411,26 @@ class PyLifterClient:
         self._target_move_code = direction
         self._target_speed = speed
         
-        # Payload: [Direction] [Speed] [AvgPos] -- Mimicking Move Packet logic
-        # Assuming GO_OVERRIDE matches MOVE format but bypasses checks.
-        
-        # Translate direction if needed? 
-        # MoveCode.UP (1) or MoveCode.DOWN (2)
-        
         pos = self._last_known_position if self._last_known_position is not None else 0
         payload = struct.pack("<BBi", direction, speed, pos)
         packet = build_packet(CommandCode.GO_OVERRIDE, payload)
         
         if self._client and self._is_connected:
              # logger.debug(f"TX OVERRIDE: Dir={direction}, Pos={pos}")
-             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+             async with self._write_lock:
+                 await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
 
     async def clear_error(self):
         logger.info("Sending CLEAR_ERROR...")
         packet = build_packet(CommandCode.CLEAR_ERROR)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        
+        # Protect against Service Discovery errors during crash recovery
+        try:
+            async with self._write_lock:
+                await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        except Exception as e:
+                logger.warning(f"clear_error failed (Ignored): {e}")
+
         
         # Reset local error state immediately
         self.last_error_code = 0
@@ -421,7 +439,8 @@ class PyLifterClient:
     async def go_override(self):
         logger.info("Sending GO_OVERRIDE...")
         packet = build_packet(CommandCode.GO_OVERRIDE)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        async with self._write_lock:
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
         
         # Reset local error state
         self.last_error_code = 0

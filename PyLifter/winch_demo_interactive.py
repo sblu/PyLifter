@@ -9,7 +9,27 @@ from pylifter.protocol import MoveCode, SmartPointCode
 from pylifter.client import PyLifterClient, TESTED_FIRMWARE_VERSIONS, MoveCode, SmartPointCode
 
 # Configure logs to be minimal
-logging.basicConfig(level=logging.WARNING)
+# Configure Logging
+# Console: INFO/WARNING only (Clean)
+# File: DEBUG (Verbose)
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.handlers.clear()
+
+# File Handler
+fh = logging.FileHandler('debug.log', mode='w')
+fh.setLevel(logging.DEBUG)
+fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(name)s:%(message)s'))
+root_logger.addHandler(fh)
+
+# Console Handler
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+ch.setFormatter(logging.Formatter('%(message)s'))
+root_logger.addHandler(ch)
+
+logging.getLogger("pylifter").setLevel(logging.DEBUG)
+logging.getLogger("bleak").setLevel(logging.DEBUG)
 
 
 async def check_firmware_support(version: str):
@@ -66,6 +86,18 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
     
     try:
         while True:
+            # Safety Check: connection lost?
+            # Robust Connection Check
+            if not client._is_connected or (client._client and not client._client.is_connected):
+                print(f"{prefix} Connection Lost (Bleak/Internal)! Aborting monitor.")
+                break
+
+            current_pos = client._last_known_position
+            dist = client.current_distance
+            
+            # Stall Detection (If moving but pos unchanged for 5s)
+            # Not implemented yet to keep it simple, relying on connection check first.
+
             current_pos = client._last_known_position
             dist = client.current_distance
             
@@ -408,27 +440,39 @@ async def main():
         print("Connecting to all winches...")
         for cid, client in clients.items():
             print(f"[{cid}] Connecting to {client.mac_address}...", end='', flush=True)
-            try:
-                await client.connect()
-                print(" Connected.")
-                
-                # STABILITY FIX: Wait for BLE stack to settle before querying versions
-                # High traffic immediately after connection can cause Service Discovery errors
-                await asyncio.sleep(1.5)
-
+            connected = False
+            for attempt in range(3):
                 try:
-                    # Print Version
-                    ver = await client.get_version()
-                    proto_ver = await client.get_protocol_version()
-                    print(f"      Firmware Version: {ver}")
-                    print(f"      Protocol Version: {proto_ver}")
+                    await client.connect()
+                    print(" Connected.")
+                    connected = True
                     
-                    await check_firmware_support(ver)
-                except Exception as ve:
-                    print(f"      [Warning] Could not verify firmware version: {ve}")
-                
-            except Exception as e:
-                print(f" Failed: {e}")
+                    # STABILITY FIX: Wait for BLE stack to settle before querying versions
+                    # High traffic immediately after connection can cause Service Discovery errors
+                    await asyncio.sleep(1.5)
+
+                    try:
+                        # Print Version
+                        ver = await client.get_version()
+                        proto_ver = await client.get_protocol_version()
+                        print(f"      Firmware Version: {ver}")
+                        print(f"      Protocol Version: {proto_ver}")
+                        
+                        await check_firmware_support(ver)
+                    except Exception as ve:
+                        print(f"      [Warning] Could not verify firmware version: {ve}")
+                    
+                    break # Success, exit retry loop
+                    
+                except Exception as e:
+                    if attempt < 2:
+                        print(f" Failed (Retry {attempt+1}/3): {e} ...", end='', flush=True)
+                        await asyncio.sleep(2.0)
+                    else:
+                        print(f" Failed: {e}")
+            
+            if not connected:
+                print(f"      [Error] Could not connect to winch {cid} after 3 attempts.")
         
     def print_status():
         print("\nStatus:")
@@ -493,7 +537,7 @@ async def main():
             break
             
         if cmd == 'P':
-            print_status()
+            # Just continue to loop start which prints status
             continue
             
         if cmd == 'PAIR':
