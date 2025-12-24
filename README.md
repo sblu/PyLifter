@@ -97,7 +97,7 @@ If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if yo
 - `PyLifter/pylifter/`: Core library package (`client.py`, `protocol.py`).
 - `PyLifter/winch_demo_interactive.py`: Main user interface.
 - `PyLifter/calibrate_units.py`: Calibration utility.
-- `PROTOCOL.md`: Technical documentation of the reverse-engineered BLE protocol.
+- [`PROTOCOL.md`](PyLifter/PROTOCOL.md): Technical documentation of the reverse-engineered BLE protocol.
 
 ## Disclaimer
 
