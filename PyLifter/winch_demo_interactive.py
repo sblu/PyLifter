@@ -104,6 +104,61 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
         await asyncio.sleep(0.5) # Settle
         print(f"  -> Stopped at: {client._last_known_position} | {client.current_distance:.1f} cm")
 
+async def monitor_smart_move(client: PyLifterClient, direction: MoveCode):
+    """
+    Monitors a 'Smart Move' (LIFT/LOWER) until the winch stops automatically.
+    """
+    print(f"  -> Smart Moving {'UP' if direction == MoveCode.SMART_UP else 'DOWN'}...")
+    
+    # CRITICAL Fix: Clear any existing End-of-Travel errors before moving
+    await client.clear_error()
+    await asyncio.sleep(0.25)
+    
+    await client.move(direction, speed=100)
+    
+    # We rely on the device to stop itself when it hits a limit.
+    # We'll monitor position changes. If pos stops changing for a duration, we are done.
+    # OR if we see a limit error.
+    
+    last_pos = client._last_known_position
+    stable_count = 0
+    
+    try:
+        while True:
+            current_pos = client._last_known_position
+            dist = client.current_distance
+            
+            print(f"     Pos: {current_pos:<6} | Dist: {dist:.1f} cm", end='\r')
+            
+            # Check Errors/Limits
+            if client.last_error_code == 0x86:
+                 print("\n  -> Reached Limit (0x86).")
+                 break
+            if client.last_error_code == 0x81:
+                 print("\n  -> Reached Soft Limit (0x81).")
+                 break
+            
+            # Check for Stability (Auto-Stop detection)
+            if current_pos == last_pos:
+                stable_count += 1
+                if stable_count > 20: # ~1 second of no movement
+                    # Verify we aren't just starting
+                    # Actually, smart move might stop immediately if already at limit.
+                    print("\n  -> Movement Stopped.")
+                    break
+            else:
+                stable_count = 0
+                last_pos = current_pos
+            
+            await asyncio.sleep(0.05)
+            
+    finally:
+        # No need to explicitly stop if device stopped, but safe to send STOP anyway
+        await client.stop()
+        print() 
+        await asyncio.sleep(0.5)
+        print(f"  -> Stopped at: {client._last_known_position} | {client.current_distance:.1f} cm")
+
 import os
 
 async def main():
@@ -161,7 +216,7 @@ async def main():
         while True:
             # Show current state
             print(f"\nCurrent: Pos={client._last_known_position} | Dist={client.current_distance:.1f} cm")
-            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U <val> | D <val> | SH | SL | Q | ? for help): ")
+            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U/D | LIFT/LOWER | SH/SL | Q | ?): ")
             
             parts = cmd_str.strip().split()
             if not parts: continue
@@ -175,11 +230,21 @@ async def main():
                 print("\n--- Command Help ---")
                 print("  U <val> : Move UP by <val> centimeters (e.g., 'U 10')")
                 print("  D <val> : Move DOWN by <val> centimeters (e.g., 'D 5.5')")
+                print("  LIFT    : Smart Lift (Move UP to High Limit)")
+                print("  LOWER   : Smart Lower (Move DOWN to Low Limit)")
                 print("  SH      : Set HIGH (Top) Soft Limit at current position")
                 print("  SL      : Set LOW (Bottom) Soft Limit at current position")
                 print("  Q       : Quit")
                 print("  ?       : Show this help message")
                 print("--------------------\n")
+                continue
+
+            if cmd == 'LIFT':
+                await monitor_smart_move(client, MoveCode.SMART_UP)
+                continue
+
+            if cmd == 'LOWER':
+                await monitor_smart_move(client, MoveCode.SMART_DOWN)
                 continue
 
             if cmd == 'SH':

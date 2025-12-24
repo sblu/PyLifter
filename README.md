@@ -55,6 +55,8 @@ python3 PyLifter/winch_demo_interactive.py
 **Commands:**
 - `U 10`: Move UP by 10 cm.
 - `D 5.5`: Move DOWN by 5.5 cm.
+- `LIFT`: Smart Lift (Move UP to High Limit).
+- `LOWER`: Smart Lower (Move DOWN to Low Limit).
 - `SH`: Set **High** (Top) Soft Limit at current position.
 - `SL`: Set **Low** (Bottom) Soft Limit at current position.
 - `?`: Show help menu.
