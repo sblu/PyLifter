@@ -114,6 +114,7 @@ class PyLifterClient:
     async def _keep_alive_loop(self):
         logger.info("Keep-Alive Loop Started.")
         try:
+            service_fail_count = 0
             while self._is_connected:
                 # Build packet based on current state
                 # ALWAYS use _last_known_position to prevent Sync Errors
@@ -131,8 +132,22 @@ class PyLifterClient:
                     # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
                     await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
                 except Exception as e:
-                    # Reverting strict disconnect. Just warn.
-                    # If truly disconnected, the disconnect_callback will handle cleanup.
+                    err_str = str(e)
+                    if "Service Discovery" in err_str:
+                        # Transient startup error or connection loss.
+                        service_fail_count += 1
+                        if service_fail_count > 5:
+                            logger.error(f"Keep-Alive Stopped (Max Retries): {err_str}")
+                            self._is_connected = False
+                            break
+                        else:
+                            logger.warning(f"Keep-Alive Service Discovery Error (Retry {service_fail_count}/5)...")
+                            await asyncio.sleep(1.0) # Wait for stack to recover
+                            continue
+                    else:
+                        service_fail_count = 0 # Reset on successful write (or other error)
+
+                    # For other errors, just warn and retry (transient glitch)
                     logger.warning(f"Keep-Alive Write Failed: {e}")
                 
                 await asyncio.sleep(0.1) # 10Hz - Safe for Sync
@@ -214,7 +229,12 @@ class PyLifterClient:
         packet = build_move_packet(MoveCode.STOP, speed=0, avg_pos=pos)
         
         if self._client and self._is_connected:
-             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+            try:
+                await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+            except Exception as e:
+                # If immediate stop fails (e.g. Service Discovery error), just warn.
+                # The keep-alive loop will pick up the new _target_move_code = STOP shortly.
+                logger.warning(f"Immediate Stop Write Failed: {e}")
 
     async def get_stats(self):
         self._stats_future = asyncio.get_event_loop().create_future()

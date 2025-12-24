@@ -265,12 +265,18 @@ async def pair_new_winch(config_file, config, clients):
         await new_client.connect()
         print("Connected.")
         
-        ver = await new_client.get_version()
-        proto_ver = await new_client.get_protocol_version()
-        print(f"Firmware Version: {ver}")
-        print(f"Protocol Version: {proto_ver}")
+        # STABILITY FIX: Wait for BLE stack to settle
+        await asyncio.sleep(1.5)
         
-        await check_firmware_support(ver)
+        try:
+            ver = await new_client.get_version()
+            proto_ver = await new_client.get_protocol_version()
+            print(f"Firmware Version: {ver}")
+            print(f"Protocol Version: {proto_ver}")
+            
+            await check_firmware_support(ver)
+        except Exception as ve:
+            print(f"[Warning] Could not verify firmware version: {ve}")
         
         # Add to active clients
         clients[next_id] = new_client
@@ -405,27 +411,38 @@ async def main():
             try:
                 await client.connect()
                 print(" Connected.")
-                # Print Version
-                ver = await client.get_version()
-                proto_ver = await client.get_protocol_version()
-                print(f"      Firmware Version: {ver}")
-                print(f"      Protocol Version: {proto_ver}")
                 
-                await check_firmware_support(ver)
+                # STABILITY FIX: Wait for BLE stack to settle before querying versions
+                # High traffic immediately after connection can cause Service Discovery errors
+                await asyncio.sleep(1.5)
+
+                try:
+                    # Print Version
+                    ver = await client.get_version()
+                    proto_ver = await client.get_protocol_version()
+                    print(f"      Firmware Version: {ver}")
+                    print(f"      Protocol Version: {proto_ver}")
+                    
+                    await check_firmware_support(ver)
+                except Exception as ve:
+                    print(f"      [Warning] Could not verify firmware version: {ve}")
                 
             except Exception as e:
                 print(f" Failed: {e}")
         
-    print("\n--- Ready ---")
-    
-    while True:
-        # Print Status
+    def print_status():
         print("\nStatus:")
         if not clients:
             print("  (No winches configured)")
         for cid, c in clients.items():
             status = "Connected" if c._is_connected else "Disconnected"
             print(f"  [{cid}] {c.mac_address}: {status} | Pos={c._last_known_position} | {c.current_distance:.1f} cm")
+            
+    print("\n--- Ready ---")
+    
+    while True:
+        # Print Status
+        print_status()
 
         cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "\nCommand ([ID,ID | all] <CMD>... | PAIR | Q | ?): ")
         
@@ -475,6 +492,10 @@ async def main():
         if cmd == 'Q':
             break
             
+        if cmd == 'P':
+            print_status()
+            continue
+            
         if cmd == 'PAIR':
             await pair_new_winch(config_file, config, clients)
             continue
@@ -498,6 +519,7 @@ async def main():
             print("  CL            : Clear LOW (Bottom) Soft Limit")
             print("  PAIR          : Scan and Pair a NEW winch")
             print("  UNPAIR        : Remove a winch from configuration")
+            print("  P             : Print Status of all winches")
             print("  Q             : Quit")
             print("\nExamples:")
             print("  1 U 10        -> Move Winch 1 UP by 10cm at 100% speed")
