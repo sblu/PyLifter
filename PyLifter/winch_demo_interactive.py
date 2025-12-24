@@ -161,7 +161,7 @@ async def main():
         while True:
             # Show current state
             print(f"\nCurrent: Pos={client._last_known_position} | Dist={client.current_distance:.1f} cm")
-            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U/D/SH/SL/Q/?): ")
+            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U <val> | D <val> | SH | SL | Q | ? for help): ")
             
             parts = cmd_str.strip().split()
             if not parts: continue

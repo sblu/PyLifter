@@ -63,6 +63,12 @@ python3 PyLifter/winch_demo_interactive.py
 **Soft Limits:**
 If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if you want to override. Type `Y` to proceed past the limit.
 
+
+## Firmware Compatibility
+
+- **Firmware Updates**: This library **does not** support updating the winch firmware. Please use the official MyLifter app for firmware updates.
+- **Tested Version**: This library has been tested primarily with MyLifter Firmware **v3.2**. Compatibility with other versions is likely but not guaranteed.
+
 ## Project Structure
 
 - `PyLifter/pylifter/`: Core library package (`client.py`, `protocol.py`).
