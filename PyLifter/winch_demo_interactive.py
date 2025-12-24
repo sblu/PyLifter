@@ -42,7 +42,7 @@ async def check_firmware_support(version: str):
             else:
                 pass # Invalid input, loop again
 
-async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, allow_override: bool = False):
+async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, speed: int = 100, allow_override: bool = False):
     """
     Moves the winch in 'direction' until 'target_pos' is reached.
     """
@@ -54,13 +54,13 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
         print(f"{prefix} Error: Unknown start position.")
         return
 
-    print(f"{prefix} Moving {'UP' if direction == MoveCode.UP else 'DOWN'} to Target Pos: {target_pos}")
+    print(f"{prefix} Moving {'UP' if direction == MoveCode.UP else 'DOWN'} to Target Pos: {target_pos} (Speed: {speed}%)")
     
     # CRITICAL Fix: Clear any existing End-of-Travel errors before moving
     await client.clear_error()
     await asyncio.sleep(0.25)
     
-    await client.move(direction, speed=100)
+    await client.move(direction, speed=speed)
     
     is_overridden = False
     
@@ -89,7 +89,7 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
                              await asyncio.sleep(0.5)
                              
                              # Force Move using GO_OVERRIDE (0x25)
-                             await client.override_move(direction, speed=100)
+                             await client.override_move(direction, speed=speed)
                              # Continue loop
                              continue
                          else:
@@ -488,20 +488,21 @@ async def main():
             print("Syntax: [ID,ID...|ALL] <COMMAND> [ARGS]")
             print("  (If no ID is specified, Command applies to ID 1)")
             print("\nAvailable Commands:")
-            print("  U <val>     : Move UP by <val> centimeters (Synonym: UP)")
-            print("  D <val>     : Move DOWN by <val> centimeters (Synonym: DOWN)")
-            print("  LIFT        : Smart Lift (Move UP to High Limit)")
-            print("  LOWER       : Smart Lower (Move DOWN to Low Limit)")
-            print("  SH          : Set HIGH (Top) Soft Limit at current position")
-            print("  SL          : Set LOW (Bottom) Soft Limit at current position")
-            print("  CH          : Clear HIGH (Top) Soft Limit")
-            print("  CL          : Clear LOW (Bottom) Soft Limit")
-            print("  PAIR        : Scan and Pair a NEW winch")
-            print("  UNPAIR      : Remove a winch from configuration")
-            print("  Q           : Quit")
+            print("  U <val> [spd] : Move UP by <val> cm, optional speed 25-100% (Synonym: UP)")
+            print("  D <val> [spd] : Move DOWN by <val> cm, optional speed 25-100% (Synonym: DOWN)")
+            print("  LIFT          : Smart Lift (Move UP to High Limit)")
+            print("  LOWER         : Smart Lower (Move DOWN to Low Limit)")
+            print("  SH            : Set HIGH (Top) Soft Limit at current position")
+            print("  SL            : Set LOW (Bottom) Soft Limit at current position")
+            print("  CH            : Clear HIGH (Top) Soft Limit")
+            print("  CL            : Clear LOW (Bottom) Soft Limit")
+            print("  PAIR          : Scan and Pair a NEW winch")
+            print("  UNPAIR        : Remove a winch from configuration")
+            print("  Q             : Quit")
             print("\nExamples:")
-            print("  1 U 10      -> Move Winch 1 UP by 10cm")
-            print("  ALL LIFT    -> Smart Lift ALL Winches")
+            print("  1 U 10        -> Move Winch 1 UP by 10cm at 100% speed")
+            print("  1 U 10 50     -> Move Winch 1 UP by 10cm at 50% speed")
+            print("  ALL LIFT      -> Smart Lift ALL Winches")
             print("  1,2 LIFT    -> Smart Lift Winches 1 and 2")
             print("  PAIR        -> Start Pairing Mode")
             print("--------------------\n")
@@ -564,6 +565,21 @@ async def main():
             elif cmd in ['U', 'D']:
                 try:
                     delta_cm = float(args[0])
+                    
+                    # Parse Speed (Optional)
+                    speed = 100
+                    if len(args) > 1:
+                        try:
+                            speed = int(args[1])
+                            if not (25 <= speed <= 100):
+                                print(f"Error: Speed must be 25-100.")
+                                print_help()
+                                continue
+                        except ValueError:
+                            print(f"Error: Invalid speed '{args[1]}'. Using 100.")
+                            print_help()
+                            continue
+
                     current_dist = client.current_distance
                     
                     if cmd == 'U':
@@ -581,7 +597,7 @@ async def main():
                     
                     # Allow override only if targeting a single winch
                     allow_override = (len(target_ids) == 1)
-                    tasks.append(monitor_move(client, target_pos, direction, tid, allow_override=allow_override))
+                    tasks.append(monitor_move(client, target_pos, direction, tid, speed=speed, allow_override=allow_override))
                 except ValueError:
                     print(f"Invalid Value: {args[0]}")
             else:

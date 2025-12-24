@@ -48,8 +48,8 @@ If no devices are configured, the script will prompt you to enter **Pairing Mode
 Once paired, the passkey is saved to `pylifter_config.json`, and future connections will be automatic.
 
 **Commands:**
-- `U 10`: Move UP by 10 cm.
-- `D 5.5`: Move DOWN by 5.5 cm.
+- `U 10 [speed]`: Move UP by 10 cm (optional speed 25-100%).
+- `D 5.5 [speed]`: Move DOWN by 5.5 cm (optional speed 25-100%).
 - `LIFT`: Smart Lift (Move UP to High Limit).
 - `LOWER`: Smart Lower (Move DOWN to Low Limit).
 - `SH`: Set **High** (Top) Soft Limit at current position.
@@ -77,6 +77,7 @@ Use the `PAIR` command to scan for and add new winches to your configuration.
 **Targeted Commands:**
 You can specific which winch(es) to control by prefixing the command with IDs (comma-separated).
 *   `1 U 10`: Move Winch 1 UP by 10 cm.
+*   `ALL D 20 50`: Move ALL winches DOWN by 20 cm at **50% speed**.
 *   `2 LIFT`: Smart Lift Winch 2.
 *   `1,2 SH`: Set High Limit for Winches 1 and 2.
 *   `ALL LIFT`: Smart Lift **ALL** connected winches.
@@ -92,7 +93,7 @@ If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if yo
 
 ## Firmware Compatibility
 
-- **Verification**: The library now checks the connected winch firmware active startup. If an untested version is detected (anything other than **v3.2**), a warning will be displayed. You can choose to bypass this at your own risk.
+- **Verification**: The library checks the connected winch firmware active startup. If an untested version is detected (anything other than **v3.2**), a warning will be displayed. You can choose to bypass this at your own risk.
 - **Updates**: This library **does not** support updating the winch firmware. Please use the official MyLifter app for firmware updates.
 - **Tested Version**: Validated against Firmware **v3.2**. Compatible with v3.1 with limited testing.
 
