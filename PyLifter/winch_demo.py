@@ -18,7 +18,9 @@ async def monitor_position(client: PyLifterClient, duration: float):
 
 async def main():
     import json
-    config_file = "pylifter_config.json"
+    # Resolve config path relative to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file = os.path.join(script_dir, "pylifter_config.json")
     
     # Defaults
     mac_address = "CC:CC:CC:FE:15:33"

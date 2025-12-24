@@ -241,8 +241,12 @@ class PyLifterClient:
                 logger.warning(f"MOVE Response too short: {data.hex()}")
 
     async def set_calibration(self, code: int = 1):
-        logger.info(f"Sending SET_CALIBRATION (Code={code})...")
-        packet = build_packet(CommandCode.CALIBRATE, struct.pack("B", code))
+        """Deprecated: Use set_smart_point instead."""
+        await self.set_smart_point(SmartPointCode(code))
+
+    async def set_smart_point(self, point: SmartPointCode):
+        logger.info(f"Setting Smart Point: {point.name} ({point.value})...")
+        packet = build_packet(CommandCode.CALIBRATE, struct.pack("B", point.value))
         await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
 
     async def clear_error(self):

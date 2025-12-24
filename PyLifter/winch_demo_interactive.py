@@ -3,7 +3,7 @@ import asyncio
 import logging
 import json
 import curses
-from pylifter import PyLifterClient, MoveCode
+from pylifter import PyLifterClient, MoveCode, SmartPointCode
 
 # Configure logs to be minimal
 logging.basicConfig(level=logging.WARNING)
@@ -104,8 +104,12 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
         await asyncio.sleep(0.5) # Settle
         print(f"  -> Stopped at: {client._last_known_position} | {client.current_distance:.1f} cm")
 
+import os
+
 async def main():
-    config_file = "pylifter_config.json"
+    # Resolve config path relative to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file = os.path.join(script_dir, "pylifter_config.json")
     
     # Defaults
     mac_address = "CC:CC:CC:FE:15:33"
@@ -157,7 +161,7 @@ async def main():
         while True:
             # Show current state
             print(f"\nCurrent: Pos={client._last_known_position} | Dist={client.current_distance:.1f} cm")
-            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U <cm> | D <cm> | Q): ")
+            cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "Command (U/D/SH/SL/Q/?): ")
             
             parts = cmd_str.strip().split()
             if not parts: continue
@@ -166,6 +170,29 @@ async def main():
             
             if cmd == 'Q':
                 break
+
+            if cmd == '?':
+                print("\n--- Command Help ---")
+                print("  U <val> : Move UP by <val> centimeters (e.g., 'U 10')")
+                print("  D <val> : Move DOWN by <val> centimeters (e.g., 'D 5.5')")
+                print("  SH      : Set HIGH (Top) Soft Limit at current position")
+                print("  SL      : Set LOW (Bottom) Soft Limit at current position")
+                print("  Q       : Quit")
+                print("  ?       : Show this help message")
+                print("--------------------\n")
+                continue
+
+            if cmd == 'SH':
+                print("   -> Setting High (Top) Limit...")
+                await client.set_smart_point(SmartPointCode.TOP)
+                print("   -> High Limit Set.")
+                continue
+
+            if cmd == 'SL':
+                print("   -> Setting Low (Bottom) Limit...")
+                await client.set_smart_point(SmartPointCode.BOTTOM)
+                print("   -> Low Limit Set.")
+                continue
                 
             if cmd in ['U', 'D'] and len(parts) > 1:
                 try:
@@ -195,7 +222,7 @@ async def main():
                 except ValueError:
                     print("Invalid distance.")
             else:
-                print("Unknown command. Use 'U 10', 'D 5.5', or 'Q'.")
+                print("Unknown command. Type '?' for help.")
         
     except Exception as e:
         print(f"\n[ERROR] {e}")

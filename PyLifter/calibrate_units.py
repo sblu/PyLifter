@@ -43,8 +43,14 @@ async def move_until_stop(client, direction):
         await client.stop()
         await asyncio.sleep(1.0) # Settle
 
+import os
+
 async def main():
     mac_address = "CC:CC:CC:FE:15:33" 
+    # Resolve config path relative to this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file = os.path.join(script_dir, "pylifter_config.json")
+    
     passkey_file = "passkey.txt"
     passkey = None
     
@@ -156,9 +162,9 @@ async def main():
                 "intercept": intercept
             }
         }
-        with open("pylifter_config.json", "w") as f:
+        with open(config_file, "w") as f:
             json.dump(config, f, indent=4)
-        print("\n[Saved] Calibration data saved to pylifter_config.json")
+        print(f"\n[Saved] Calibration data saved to {config_file}")
         
     except Exception as e:
         print(f"Error: {e}")
@@ -167,3 +173,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+```

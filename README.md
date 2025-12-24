@@ -1,6 +1,6 @@
 # PyLifter
 
-PyLifter is an open-source Python library and toolkit for controlling **MyLifter** motorized winch systems via Bluetooth Low Energy (BLE). It was developed by reverse-engineering the official Android application protocol.
+PyLifter is an open-source Python library and toolkit for controlling **MyLifter** motorized winch systems via Bluetooth Low Energy (BLE). It was developed using the official MyLifter Android app as a reference for the BLE protocol.
 
 ## Features
 
@@ -55,6 +55,9 @@ python3 PyLifter/winch_demo_interactive.py
 **Commands:**
 - `U 10`: Move UP by 10 cm.
 - `D 5.5`: Move DOWN by 5.5 cm.
+- `SH`: Set **High** (Top) Soft Limit at current position.
+- `SL`: Set **Low** (Bottom) Soft Limit at current position.
+- `?`: Show help menu.
 - `Q`: Quit.
 
 **Soft Limits:**
