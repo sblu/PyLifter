@@ -18,6 +18,7 @@ class CommandCode(IntEnum):
     SET_NAME = 0x09
     GET_VERSION = 0x0A
     MOVE = 0x23
+    GO_OVERRIDE = 0x25
     CALIBRATE = 0x32
     CLEAR_CALIBRATION = 0x33
     GET_STATS = 0x34

@@ -3,4 +3,4 @@ BluetoothPacketCaptures/
 __pycache__/
 *.pyc
 passkey.txt
-pylifter_config.json
+

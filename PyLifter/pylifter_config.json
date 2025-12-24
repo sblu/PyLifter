@@ -1,0 +1,8 @@
+{
+    "mac_address": "CC:CC:CC:FE:15:33",
+    "passkey": "2378a8dbc69c",
+    "calibration": {
+        "slope": -0.023545405111473624,
+        "intercept": 24.002501359434476
+    }
+}
