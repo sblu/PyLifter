@@ -1,16 +1,48 @@
-
 import asyncio
 import logging
 import json
 import curses
 import os
+import sys
 from bleak import BleakScanner
-from pylifter import PyLifterClient, MoveCode, SmartPointCode
+from pylifter.protocol import MoveCode, SmartPointCode
+from pylifter.client import PyLifterClient, TESTED_FIRMWARE_VERSIONS, MoveCode, SmartPointCode
 
 # Configure logs to be minimal
 logging.basicConfig(level=logging.WARNING)
 
-async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int):
+
+async def check_firmware_support(version: str):
+    """
+    Checks if the firmware version is in the tested list. 
+    If not, warns the user and prompts to continue or exit.
+    """
+    if version not in TESTED_FIRMWARE_VERSIONS:
+        print("\n" + "="*60)
+        print(f" WARNING: UNTESTED FIRMWARE VERSION DETECTED!")
+        print(f" Current Version: {version}")
+        print(f" Tested Versions: {', '.join(TESTED_FIRMWARE_VERSIONS)}")
+        print("="*60)
+        print(" Using this software with untested firmware may produce unpredictable results.")
+        print(" Please use the official MyLifter app to update your winch firmware to a tested version.")
+        print("="*60)
+        
+        while True:
+            # Use run_in_executor to avoid blocking the asyncio loop (and keep-alives)
+            print(" Press 'C' to CONTINUE anyway, or press ENTER to EXIT: ", end='', flush=True)
+            choice = await asyncio.get_event_loop().run_in_executor(None, sys.stdin.readline)
+            choice = choice.strip().upper()
+            
+            if choice == 'C':
+                print(" Continuing with untested firmware... (Good luck!)")
+                break
+            elif choice == '':
+                print(" Exiting.")
+                sys.exit(0)
+            else:
+                pass # Invalid input, loop again
+
+async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, allow_override: bool = False):
     """
     Moves the winch in 'direction' until 'target_pos' is reached.
     """
@@ -37,10 +69,6 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
             current_pos = client._last_known_position
             dist = client.current_distance
             
-            # TODO: How to print status for multiple winches?
-            # For now, just print updates on new lines or use a simpler log.
-            # print(f"     Pos: {current_pos:<6} | Dist: {dist:.1f} cm", end='\r') 
-            
             # Check Condition
             if direction == MoveCode.UP:
                 if current_pos >= target_pos: break
@@ -48,21 +76,57 @@ async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveC
                      print(f"{prefix} Reached Top Limit (0x86).")
                      break
                 if client.last_error_code == 0x81 and not is_overridden:
-                     print(f"{prefix} Reached Soft Limit (0x81).")
+                     print(f"{prefix} Reached TOP Soft Limit (0x81).")
                      await client.stop()
-                     # Override Logic is tricky for multi-winch. For now, just stop.
-                     print(f"{prefix} Soft Limit Hit. Override not implemented for multi-winch batch move.")
-                     break
+                     
+                     if allow_override:
+                         print(f"{prefix} [!] Condition Met. Override Limit? (Y/N): ", end='', flush=True)
+                         choice = await asyncio.get_event_loop().run_in_executor(None, input)
+                         if choice.strip().upper() == 'Y':
+                             print(f"{prefix} Overriding...")
+                             is_overridden = True
+                             await client.clear_error()
+                             await asyncio.sleep(0.5)
+                             
+                             # Force Move using GO_OVERRIDE (0x25)
+                             await client.override_move(direction, speed=100)
+                             # Continue loop
+                             continue
+                         else:
+                             print(f"{prefix} Stopping.")
+                             break
+                     else:
+                         print(f"{prefix} Soft Limit Hit. Override not implemented for multi-winch batch move.")
+                         break
+
             else:
                 if current_pos <= target_pos: break
                 if client.last_error_code == 0x86:
                      print(f"{prefix} Reached Bottom Limit (0x86).")
                      break
                 if client.last_error_code == 0x81 and not is_overridden:
-                     print(f"{prefix} Reached Soft Limit (0x81).")
+                     print(f"{prefix} Reached BOTTOM Soft Limit (0x81).")
                      await client.stop()
-                     print(f"{prefix} Soft Limit Hit.")
-                     break
+                     
+                     if allow_override:
+                         print(f"{prefix} [!] Condition Met. Override Limit? (Y/N): ", end='', flush=True)
+                         choice = await asyncio.get_event_loop().run_in_executor(None, input)
+                         if choice.strip().upper() == 'Y':
+                             print(f"{prefix} Overriding...")
+                             is_overridden = True
+                             await client.clear_error()
+                             await asyncio.sleep(0.5)
+                             
+                             # Force Move
+                             ovr_dir = MoveCode.OVERRIDE_UP if direction == MoveCode.UP else MoveCode.OVERRIDE_DOWN
+                             await client.move(ovr_dir, speed=100)
+                             continue
+                         else:
+                             print(f"{prefix} Stopping.")
+                             break
+                     else:
+                         print(f"{prefix} Soft Limit Hit. Override not implemented for multi-winch batch move.")
+                         break
             
             await asyncio.sleep(0.1)
             
@@ -93,8 +157,14 @@ async def monitor_smart_move(client: PyLifterClient, direction: MoveCode, client
             if client.last_error_code == 0x86:
                  print(f"{prefix} Reached Limit (0x86).")
                  break
+            if client.last_error_code == 0x83:
+                 limit_type = "TOP" if direction == MoveCode.SMART_UP else "BOTTOM"
+                 print(f"{prefix} Failed: {limit_type} Limit Not Set (0x83). Skipping.")
+                 break
+            
             if client.last_error_code == 0x81:
-                 print(f"{prefix} Reached Soft Limit (0x81).")
+                 limit_type = "TOP" if direction == MoveCode.SMART_UP else "BOTTOM"
+                 print(f"{prefix} Reached {limit_type} Soft Limit (0x81).")
                  break
             
             if current_pos == last_pos:
@@ -195,6 +265,13 @@ async def pair_new_winch(config_file, config, clients):
         await new_client.connect()
         print("Connected.")
         
+        ver = await new_client.get_version()
+        proto_ver = await new_client.get_protocol_version()
+        print(f"Firmware Version: {ver}")
+        print(f"Protocol Version: {proto_ver}")
+        
+        await check_firmware_support(ver)
+        
         # Add to active clients
         clients[next_id] = new_client
         
@@ -232,12 +309,16 @@ async def unpair_winch(config_file, config, clients):
     print(f"Unpairing ID {target_id}...")
     
     # Disconnect if active
+    # Disconnect if active
     if target_id in clients:
-        print(f"Disconnecting ID {target_id}...", end='', flush=True)
-        await clients[target_id].disconnect()
-        # Wait for stack to settle invisibly
-        await asyncio.sleep(3.0)
-        print(" Disconnected.")
+        if clients[target_id]._is_connected:
+            print(f"Disconnecting ID {target_id}...", end='', flush=True)
+            await clients[target_id].disconnect()
+            # Wait for stack to settle invisibly
+            await asyncio.sleep(2.0)
+            print(" Disconnected.")
+        else:
+            print(f"Skipping disconnect for ID {target_id} (Already Disconnected).")
     
     # Remove from devices list
     remaining_devices = [d for d in devices if d['id'] != target_id]
@@ -324,6 +405,14 @@ async def main():
             try:
                 await client.connect()
                 print(" Connected.")
+                # Print Version
+                ver = await client.get_version()
+                proto_ver = await client.get_protocol_version()
+                print(f"      Firmware Version: {ver}")
+                print(f"      Protocol Version: {proto_ver}")
+                
+                await check_firmware_support(ver)
+                
             except Exception as e:
                 print(f" Failed: {e}")
         
@@ -379,6 +468,10 @@ async def main():
         cmd = parts[cmd_start_idx].upper()
         args = parts[cmd_start_idx+1:]
         
+        # Normalize Synonyms
+        if cmd == "UP": cmd = "U"
+        if cmd == "DOWN": cmd = "D"
+        
         if cmd == 'Q':
             break
             
@@ -395,12 +488,14 @@ async def main():
             print("Syntax: [ID,ID...|ALL] <COMMAND> [ARGS]")
             print("  (If no ID is specified, Command applies to ID 1)")
             print("\nAvailable Commands:")
-            print("  U <val>     : Move UP by <val> centimeters")
-            print("  D <val>     : Move DOWN by <val> centimeters")
+            print("  U <val>     : Move UP by <val> centimeters (Synonym: UP)")
+            print("  D <val>     : Move DOWN by <val> centimeters (Synonym: DOWN)")
             print("  LIFT        : Smart Lift (Move UP to High Limit)")
             print("  LOWER       : Smart Lower (Move DOWN to Low Limit)")
             print("  SH          : Set HIGH (Top) Soft Limit at current position")
             print("  SL          : Set LOW (Bottom) Soft Limit at current position")
+            print("  CH          : Clear HIGH (Top) Soft Limit")
+            print("  CL          : Clear LOW (Bottom) Soft Limit")
             print("  PAIR        : Scan and Pair a NEW winch")
             print("  UNPAIR      : Remove a winch from configuration")
             print("  Q           : Quit")
@@ -416,7 +511,7 @@ async def main():
             continue
 
         # Validate Command
-        valid_cmds = ['LIFT', 'LOWER', 'SH', 'SL', 'U', 'D']
+        valid_cmds = ['LIFT', 'LOWER', 'SH', 'SL', 'CH', 'CL', 'CB', 'U', 'D']
         if cmd not in valid_cmds:
             print(f"\n[ERROR] Unknown command: '{cmd}'")
             print_help()
@@ -456,6 +551,16 @@ async def main():
                      print(f"[Winch {i}] Setting Low Limit...")
                      await c.set_smart_point(SmartPointCode.BOTTOM)
                  tasks.append(do_sl(client, tid))
+            elif cmd == 'CH':
+                 async def do_ch(c, i):
+                     print(f"[Winch {i}] Clearing High Limit...")
+                     await c.clear_smart_point(SmartPointCode.TOP)
+                 tasks.append(do_ch(client, tid))
+            elif cmd in ['CL', 'CB']: # Support CL or CB
+                 async def do_cl(c, i):
+                     print(f"[Winch {i}] Clearing Low Limit...")
+                     await c.clear_smart_point(SmartPointCode.BOTTOM)
+                 tasks.append(do_cl(client, tid))
             elif cmd in ['U', 'D']:
                 try:
                     delta_cm = float(args[0])
@@ -473,7 +578,10 @@ async def main():
                         continue
                         
                     target_pos = int((target_dist - intercept) / slope)
-                    tasks.append(monitor_move(client, target_pos, direction, tid))
+                    
+                    # Allow override only if targeting a single winch
+                    allow_override = (len(target_ids) == 1)
+                    tasks.append(monitor_move(client, target_pos, direction, tid, allow_override=allow_override))
                 except ValueError:
                     print(f"Invalid Value: {args[0]}")
             else:
@@ -483,8 +591,13 @@ async def main():
             await asyncio.gather(*tasks)
 
     print("Disconnecting all...")
-    for c in clients.values():
-        await c.disconnect()
+    for cid, c in clients.items():
+        if c._is_connected:
+            print(f"[{cid}] Disconnecting from {c.mac_address}...", end='', flush=True)
+            await c.disconnect()
+            print(" Disconnected.")
+        else:
+             print(f"[{cid}] Skipping {c.mac_address} (Already Disconnected).")
 
 if __name__ == "__main__":
     asyncio.run(main())

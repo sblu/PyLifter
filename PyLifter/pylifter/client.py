@@ -8,6 +8,8 @@ from .protocol import *
 
 logger = logging.getLogger(__name__)
 
+TESTED_FIRMWARE_VERSIONS = ["3.2"]
+
 class PyLifterClient:
     def __init__(self, mac_address: str, passkey: Optional[str] = None):
         self.mac_address = mac_address
@@ -16,7 +18,10 @@ class PyLifterClient:
         self._auth_event = asyncio.Event()
 
         self._notification_callbacks = []
+        self._notification_callbacks = []
         self._stats_future: Optional[asyncio.Future] = None
+        self._version_future: Optional[asyncio.Future] = None
+        self._proto_version_future: Optional[asyncio.Future] = None
         
         # State for Keep-Alive Loop
         self._polling_task: Optional[asyncio.Task] = None
@@ -126,14 +131,12 @@ class PyLifterClient:
                     # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
                     await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
                 except Exception as e:
-                    err_str = str(e)
-                    if "Service Discovery" in err_str or "Not connected" in err_str:
-                        logger.error(f"Keep-Alive Fatal Error: {err_str}. Disconnecting.")
-                        self._is_connected = False
-                        break
+                    # Reverting strict disconnect. Just warn.
+                    # If truly disconnected, the disconnect_callback will handle cleanup.
                     logger.warning(f"Keep-Alive Write Failed: {e}")
                 
                 await asyncio.sleep(0.1) # 10Hz - Safe for Sync
+                    
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -219,6 +222,18 @@ class PyLifterClient:
         await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
         return await asyncio.wait_for(self._stats_future, timeout=3.0)
 
+    async def get_version(self):
+        self._version_future = asyncio.get_event_loop().create_future()
+        packet = build_packet(CommandCode.GET_VERSION)
+        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
+        return await asyncio.wait_for(self._version_future, timeout=3.0)
+
+    async def get_protocol_version(self):
+        self._proto_version_future = asyncio.get_event_loop().create_future()
+        packet = build_packet(CommandCode.GET_PROTOCOL_VERSION)
+        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
+        return await asyncio.wait_for(self._proto_version_future, timeout=3.0)
+
     def _notification_handler(self, sender, data):
         # logger.debug(f"RX: {data.hex()}")
         if not data:
@@ -254,6 +269,59 @@ class PyLifterClient:
             if self._stats_future and not self._stats_future.done():
                 self._stats_future.set_result(data)
         
+        elif cmd == CommandCode.GET_VERSION:
+            if len(data) >= 10: # We need at least up to byte 7 (firmware.major) + 2 wrapper? No, payload is data[2:]
+                # Packet: [Cmd][Len][Payload...]
+                # Payload based on Java:
+                # 0: hw.minor
+                # 1: hw.major
+                # 2: hw.ver
+                # 3: factory_tag
+                # 4-5: unknown1
+                # 6: fw.minor
+                # 7: fw.major
+                
+                payload = data[2:]
+                if len(payload) >= 8:
+                    try:
+                        hw_min, hw_maj, hw_ver, fac_tag, _, fw_min, fw_maj = struct.unpack("<BBBB H BB", payload[:8])
+                        
+                        # Firmware Version = fw_maj.fw_min (e.g. 3.1)
+                        # Hardware Version = hw_maj.hw_min.hw_ver
+                        
+                        version_str = f"{fw_maj}.{fw_min}" # Matches App display style (3.1)
+                        # Optionally include build/etc if needed, but App seems to show X.Y
+                        
+                        logger.info(f"Firmware Version: {version_str} (HW: {hw_maj}.{hw_min}.{hw_ver})")
+                        
+                        if self._version_future and not self._version_future.done():
+                            self._version_future.set_result(version_str)
+                    except Exception as e:
+                         logger.warning(f"GET_VERSION Parse Error: {e}")
+                else:
+                    logger.warning(f"GET_VERSION Payload too short: {len(payload)}")
+            else:
+                 logger.warning(f"GET_VERSION Response too short: {data.hex()}")
+        
+        elif cmd == CommandCode.GET_PROTOCOL_VERSION:
+            # Payload: 1 byte "version"
+            if len(data) >= 3: 
+                payload = data[2:]
+                try:
+                    raw_ver = payload[0]
+                    # Guessing Nibble encoding: 0x41 -> 4.1
+                    maj = (raw_ver >> 4) & 0x0F
+                    min_ = raw_ver & 0x0F
+                    ver_str = f"{maj}.{min_}"
+                        
+                    logger.info(f"Protocol Version: {ver_str} (Raw: 0x{raw_ver:02X})")
+                    if self._proto_version_future and not self._proto_version_future.done():
+                        self._proto_version_future.set_result(ver_str)
+                except:
+                     if self._proto_version_future: self._proto_version_future.set_result("Unknown")
+            else:
+                logger.warning(f"GET_PROTOCOL_VERSION Response too short: {data.hex()}")
+        
         elif cmd == CommandCode.MOVE:
             # Payload: 8 bytes.
             payload = data[2:]
@@ -274,6 +342,8 @@ class PyLifterClient:
                              logger.error(f"Sync Error (0x09)! DevicePos={pos}, ClientLastKnown={self._last_known_position}")
                          elif error_code == 0x81: # WarningSoftLimit
                              logger.warning(f"Soft Limit Reached (0x81) at Pos={pos}")
+                         elif error_code == 0x83: # ErrorSmartPointNotSet
+                             logger.warning(f"Enable to Move: Smart Point Not Set (0x83) at Pos={pos}")
                          else:
                              logger.error(f"MOVE returned Error Code: {error_code} at Pos={pos}")
                      self._last_logged_error_code = error_code
@@ -292,6 +362,32 @@ class PyLifterClient:
         logger.info(f"Setting Smart Point: {point.name} ({point.value})...")
         packet = build_packet(CommandCode.CALIBRATE, struct.pack("B", point.value))
         await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+
+    async def clear_smart_point(self, point: SmartPointCode):
+        logger.info(f"Clearing Smart Point: {point.name} ({point.value})...")
+        packet = build_clear_smart_point_packet(point)
+        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+        
+    async def override_move(self, direction: MoveCode, speed: int = 100):
+        """
+        Sends GO_OVERRIDE (0x25) to move past limits.
+        """
+        self._target_move_code = direction
+        self._target_speed = speed
+        
+        # Payload: [Direction] [Speed] [AvgPos] -- Mimicking Move Packet logic
+        # Assuming GO_OVERRIDE matches MOVE format but bypasses checks.
+        
+        # Translate direction if needed? 
+        # MoveCode.UP (1) or MoveCode.DOWN (2)
+        
+        pos = self._last_known_position if self._last_known_position is not None else 0
+        payload = struct.pack("<BBi", direction, speed, pos)
+        packet = build_packet(CommandCode.GO_OVERRIDE, payload)
+        
+        if self._client and self._is_connected:
+             # logger.debug(f"TX OVERRIDE: Dir={direction}, Pos={pos}")
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
 
     async def clear_error(self):
         logger.info("Sending CLEAR_ERROR...")

@@ -92,8 +92,9 @@ If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if yo
 
 ## Firmware Compatibility
 
-- **Firmware Updates**: This library **does not** support updating the winch firmware. Please use the official MyLifter app for firmware updates.
-- **Tested Version**: This library has been tested primarily with MyLifter Firmware **v3.2**. Compatibility with other versions is likely but not guaranteed.
+- **Verification**: The library now checks the connected winch firmware active startup. If an untested version is detected (anything other than **v3.2**), a warning will be displayed. You can choose to bypass this at your own risk.
+- **Updates**: This library **does not** support updating the winch firmware. Please use the official MyLifter app for firmware updates.
+- **Tested Version**: Validated against Firmware **v3.2**. Compatible with v3.1 with limited testing.
 
 ## Project Structure
 

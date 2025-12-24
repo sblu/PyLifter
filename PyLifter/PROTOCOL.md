@@ -98,6 +98,22 @@ Clears a stop point.
 - **Command Code**: `0x03` (Same as Get, distinguished by payload length?)
   - *Note*: MyLifterSpec suggests both use `0x3`. `Get` has 0 input bytes. `Set` has 6 input bytes. The device likely distinguishes based on payload length/content.
 
+### Get Version (`0x0A`)
+- **Input**: None
+- **Response**: 8+ bytes
+    - Byte 0: HW Minor
+    - Byte 1: HW Major
+    - Byte 2: HW Version
+    - ...
+    - Byte 6: **Firmware Minor**
+    - Byte 7: **Firmware Major**
+    - (e.g., Bytes 7,6 = `3, 2` -> v3.2)
+
+### Get Protocol Version (`0x05`)
+- **Input**: None
+- **Response**: 1 byte
+    - Nibble encoded: `0x41` -> `4.1`
+
 ## Protocol JSON Spec
 Extracted from `MyLifterSpec.java`:
 ```json
