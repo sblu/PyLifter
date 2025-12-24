@@ -32,25 +32,20 @@ pip install bleak
 
 ## Quick Start
 
-### 1. Initial Pairing
-**Important:** When connecting to a winch for the first time (or if the `pylifter_config.json` is missing), you must **physically press the button on the MyLifter unit** when prompt to authorized the pairing and retrieve the secure Passkey.
-
-Once paired, the passkey is saved locally, and future connections will be automatic.
-
-### 2. Calibration (Optional but Recommended)
-To enable control using real-world units (cm) instead of raw raw motor steps, run the calibration script:
-
-```bash
-python3 PyLifter/calibrate_units.py
-```
-Follow the on-screen instructions to measure top and bottom positions. This will save a `slope` and `intercept` to your config file.
-
-### 3. Interactive Control
-The main way to use this library is via the interactive demo:
+### 1. Interactive Control & Pairing
+The main way to use this library is via the interactive demo. This is also used to pair your devices.
 
 ```bash
 python3 PyLifter/winch_demo_interactive.py
 ```
+
+**Initial Pairing:**
+If no devices are configured, the script will prompt you to enter **Pairing Mode**.
+1.  Type `PAIR` in the command prompt.
+2.  Scan for devices and select your winch.
+3.  **Important:** You must **physically press the button on the MyLifter unit** when prompted to authorize pairing and retrieve the secure Passkey.
+
+Once paired, the passkey is saved to `pylifter_config.json`, and future connections will be automatic.
 
 **Commands:**
 - `U 10`: Move UP by 10 cm.
@@ -62,7 +57,15 @@ python3 PyLifter/winch_demo_interactive.py
 - `?`: Show help menu.
 - `Q`: Quit.
 
-### 4. Multi-Winch Control
+### 2. Calibration (Optional but Recommended)
+To enable control using real-world units (cm) instead of raw motor steps, run the calibration script **after pairing**:
+
+```bash
+python3 PyLifter/calibrate_units.py
+```
+Follow the on-screen instructions to measure top and bottom positions. This will save a `slope` and `intercept` to your config file.
+
+### 3. Multi-Winch Control
 The interactive demo supports controlling multiple winches simultaneously.
 
 **Pairing New Winches:**

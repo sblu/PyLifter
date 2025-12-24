@@ -46,17 +46,40 @@ async def move_until_stop(client, direction):
 import os
 
 async def main():
-    mac_address = "CC:CC:CC:FE:15:33" 
+    import json
+    import os
+    
     # Resolve config path relative to this script
     script_dir = os.path.dirname(os.path.abspath(__file__))
     config_file = os.path.join(script_dir, "pylifter_config.json")
     
-    passkey_file = "passkey.txt"
-    passkey = None
-    
+    # Load Config
     try:
-        with open(passkey_file, "r") as f: passkey = f.read().strip()
-    except: pass
+        with open(config_file, "r") as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found at {config_file}")
+        print("Please run winch_demo_interactive.py first to pair a device.")
+        return
+
+    # Check for devices
+    devices = config.get("devices", [])
+    if not devices:
+        print("Error: No devices found in configuration.")
+        print("Please run winch_demo_interactive.py first to pair a device.")
+        return
+
+    # Use first device for calibration
+    device_config = devices[0]
+    mac_address = device_config["mac_address"]
+    passkey = device_config.get("passkey")
+    
+    if not passkey:
+        print("Error: No passkey found for the first device. Please pair first.")
+        return
+
+    print(f"Calibrating using Winch ID {device_config['id']} ({mac_address})...")
+    print(f"Note: Calibration settings will be applied globally to ALL winches.")
 
     client = PyLifterClient(mac_address, passkey=passkey)
     
@@ -151,25 +174,6 @@ async def main():
         print(f"---------------------------")
         print(f"Validation Pos: {final_pos}")
         print(f"Estimated Dist: {est_val_dist:.2f} cm")
-        
-        # 1. Load Config
-        import json
-        try:
-            with open(config_file, "r") as f:
-                config = json.load(f)
-                # Support new schema
-                devices = config.get("devices", [])
-                if devices:
-                    dev = devices[0]
-                    mac_address = dev.get("mac_address", mac_address)
-                    passkey = dev.get("passkey")
-                    print(f"[Config] using Device 1: {mac_address}")
-                else:
-                    mac_address = config.get("mac_address", mac_address)
-                    passkey = config.get("passkey")
-                    
-        except FileNotFoundError:
-            print("[Config] No config file found. Using defaults.")
         
         # Save to Config
         config["mac_address"] = mac_address

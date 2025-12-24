@@ -1,4 +1,4 @@
-# MyLifter Bluetooth Protocol
+# MyLifter Bluetooth Protocol (Unofficial)
 
 ## Connection Details
 - **Service UUID**: `2d88fb13-e261-4eb9-934b-5a4fea3e3b25`
