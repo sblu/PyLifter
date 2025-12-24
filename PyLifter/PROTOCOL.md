@@ -122,3 +122,44 @@ Extracted from `MyLifterSpec.java`:
   }
 }
 ```
+
+## Protocol Flow
+
+### Pairing & Connection Handshake
+
+```mermaid
+sequenceDiagram
+    participant C as Client (PyLifter)
+    participant D as Device (MyLifter)
+    participant U as User
+
+    Note over C,D: Connection & Service Discovery Complete
+
+    alt Pairing (No Passkey)
+        C->>D: TX 0x03 (GET_PASSKEY)
+        C-->>U: "Press Button on Winch"
+        U->>D: Button Press
+        D->>C: RX 0x41 [Passkey Bytes] (Response)
+        C->>C: Save Passkey
+    end
+
+    Note over C,D: Authentication
+    C->>D: TX 0x04 [Passkey] (SET_PASSKEY)
+    D->>C: RX 0x01 (ACK) (Optional/Implied)
+
+    Note over C,D: Keep-Alive Loop (10Hz)
+    loop Every 100ms
+        C->>D: TX 0x01 [MoveCode, Speed, EchoPos]
+        D->>C: RX 0x81 [Status, CurrentPos, Errors]
+        
+        opt Position Sync
+            D-->C: Pos Update (e.g. -4000)
+            C->>C: Update LastPos (-4000)
+        end
+    end
+```
+
+### Key Behaviors
+1.  **Robust Echo**: The client **must** echo the device's last reported position in every Keep-Alive packet. Sending `0` when the device is at `-5000` causes a **Sync Error (0x09)**.
+2.  **Pairing**: The device will not send the Passkey until `GET_PASSKEY` is received AND the physical button is pressed.
+3.  **Passkey Persistence**: Once retrieved, the Passkey is permanent and should be stored to avoid requiring physical button presses for future connections.
