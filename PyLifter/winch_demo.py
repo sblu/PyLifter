@@ -31,10 +31,22 @@ async def main():
     try:
         with open(config_file, "r") as f:
             config = json.load(f)
-            mac_address = config.get("mac_address", mac_address)
-            passkey = config.get("passkey")
-            calibration = config.get("calibration", {})
-            print(f"[Config] Loaded config for {mac_address}")
+            # Support new schema (devices list)
+            devices = config.get("devices", [])
+            if devices:
+                # Default to first device
+                dev = devices[0]
+                mac_address = dev.get("mac_address", mac_address)
+                passkey = dev.get("passkey")
+                # Calibration is global now
+                calibration = config.get("calibration", {})
+                print(f"[Config] Loaded Device 1: {mac_address}")
+            else:
+                 # Legacy fallback check
+                 mac_address = config.get("mac_address", mac_address)
+                 passkey = config.get("passkey")
+                 calibration = config.get("calibration", {})
+                 print(f"[Config] Loaded config for {mac_address}")
     except FileNotFoundError:
         print("[Config] No config file found. Using defaults.")
 

@@ -1,8 +1,18 @@
 {
-    "mac_address": "CC:CC:CC:FE:15:33",
-    "passkey": "2378a8dbc69c",
     "calibration": {
         "slope": -0.023545405111473624,
         "intercept": 24.002501359434476
-    }
+    },
+    "devices": [
+        {
+            "id": 1,
+            "mac_address": "CC:CC:CC:FE:13:D9",
+            "passkey": "edb380dd340b"
+        },
+        {
+            "id": 2,
+            "mac_address": "CC:CC:CC:FE:15:33",
+            "passkey": "2378a8dbc69c"
+        }
+    ]
 }

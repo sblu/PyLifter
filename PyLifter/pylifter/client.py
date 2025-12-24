@@ -51,7 +51,7 @@ class PyLifterClient:
         self._cal_intercept = intercept
         logger.info(f"Calibration Set: Dist = {slope:.5f} * Pos + {intercept:.2f}")
 
-    async def connect(self):
+    async def connect(self, wait_for_position: bool = True):
         logger.info(f"Connecting to {self.mac_address}...")
         self._client = BleakClient(self.mac_address)
         await self._client.connect()
@@ -65,17 +65,24 @@ class PyLifterClient:
         logger.info("Handshake: Authenticating...")
         await self._authenticate()
         
-        # 2. Wait for initial position sync
-        logger.info("Waiting for initial position sync...")
-        for _ in range(20): # Wait up to 2 seconds
-            if self._last_known_position is not None:
-                logger.info(f"Initial position synced: {self._last_known_position}")
-                break
-            await asyncio.sleep(0.1)
-            
-        if self._last_known_position is None:
-            logger.warning("Initial position not received. Defaulting to 0 (Risky - May cause Sync Error).")
-            self._last_known_position = 0
+        if wait_for_position:
+            # 2. Wait for initial position sync
+            logger.info("Waiting for initial position sync...")
+            for _ in range(20): # Wait up to 2 seconds
+                if self._last_known_position is not None:
+                    logger.info(f"Initial position synced: {self._last_known_position}")
+                    break
+                await asyncio.sleep(0.1)
+                
+            if self._last_known_position is None:
+                logger.warning("Initial position not received. Defaulting to 0 (Risky - May cause Sync Error).")
+                self._last_known_position = 0
+        else:
+            logger.info("Skipping initial position sync (Pairing Mode).")
+            # Initialize to 0 strictly to avoid type errors if accessed, 
+            # though we shouldn't use this client for moves.
+            if self._last_known_position is None:
+                self._last_known_position = 0
         
         logger.info("Authenticated and Ready.")
 
@@ -119,9 +126,14 @@ class PyLifterClient:
                     # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
                     await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
                 except Exception as e:
+                    err_str = str(e)
+                    if "Service Discovery" in err_str or "Not connected" in err_str:
+                        logger.error(f"Keep-Alive Fatal Error: {err_str}. Disconnecting.")
+                        self._is_connected = False
+                        break
                     logger.warning(f"Keep-Alive Write Failed: {e}")
                 
-                await asyncio.sleep(0.1) # 10Hz - Match Raw Script Timing for Stability
+                await asyncio.sleep(0.1) # 10Hz - Safe for Sync
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -143,7 +155,39 @@ class PyLifterClient:
             logger.info("Passkey sent. Loop started.")
 
         else:
-             logger.error("No passkey provided! cannot authenticate.")
+             logger.info("No passkey provided. Sending GET_PASSKEY request...")
+             
+             # Send GET_PASSKEY (0x03, empty payload)
+             # Device should respond with 0x03 + Passkey ONLY after button is pressed.
+             packet = build_packet(CommandCode.GET_PASSKEY)
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+             
+             logger.info("Waiting for button press on Winch...")
+             # Wait for the notification handler to receive GET_PASSKEY and set self._passkey
+             # We can wait on a condition or just return and let logic flow?
+             # But connect() waits for _authenticate().
+             
+             # We should wait here until we have a passkey, or timeout.
+             try:
+                 # We need a new event for "Passkey Received" separate from "Auth Complete"?
+                 # Actually, _notification_handler sets _passkey and calls _send_set_passkey, which eventually sets _auth_event.
+                 # So waiting for _auth_event might be enough IF the device sends the passkey.
+                 # But _auth_event is set when SET_PASSKEY is ACKed.
+                 
+                 # Logic check:
+                 # 1. User presses button.
+                 # 2. Device sends 0x41 (GET_PASSKEY) with payload.
+                 # 3. Handler extracts passkey, updates self._passkey.
+                 # 4. Handler spawns _send_set_passkey.
+                 # 5. Client sends SET_PASSKEY.
+                 # 6. Device sends ACK.
+                 # 7. Handler sets _auth_event.
+                 
+                 # So yes, we can just wait for _auth_event, but with a longer timeout for user action.
+                 await asyncio.wait_for(self._auth_event.wait(), timeout=30.0) 
+                 logger.info("Pairing Successful (Passkey Received).")
+             except asyncio.TimeoutError:
+                 logger.error("Pairing Timed Out: Button not pressed?")
 
     async def move(self, direction: MoveCode, speed: int = 100):
         """Updates the target state. The keep-alive loop handles transmission."""

@@ -152,16 +152,36 @@ async def main():
         print(f"Validation Pos: {final_pos}")
         print(f"Estimated Dist: {est_val_dist:.2f} cm")
         
-        # Save to Config
+        # 1. Load Config
         import json
-        config = {
-            "mac_address": mac_address,
-            "passkey": passkey,
-            "calibration": {
-                "slope": slope,
-                "intercept": intercept
-            }
-        }
+        try:
+            with open(config_file, "r") as f:
+                config = json.load(f)
+                # Support new schema
+                devices = config.get("devices", [])
+                if devices:
+                    dev = devices[0]
+                    mac_address = dev.get("mac_address", mac_address)
+                    passkey = dev.get("passkey")
+                    print(f"[Config] using Device 1: {mac_address}")
+                else:
+                    mac_address = config.get("mac_address", mac_address)
+                    passkey = config.get("passkey")
+                    
+        except FileNotFoundError:
+            print("[Config] No config file found. Using defaults.")
+        
+        # Save to Config
+        config["mac_address"] = mac_address
+        config["passkey"] = passkey
+        # Save Calibration to config
+        # Global calibration under "calibration" key
+        if "calibration" not in config:
+            config["calibration"] = {}
+            
+        config["calibration"]["slope"] = slope
+        config["calibration"]["intercept"] = intercept
+        
         with open(config_file, "w") as f:
             json.dump(config, f, indent=4)
         print(f"\n[Saved] Calibration data saved to {config_file}")

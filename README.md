@@ -62,6 +62,27 @@ python3 PyLifter/winch_demo_interactive.py
 - `?`: Show help menu.
 - `Q`: Quit.
 
+### 4. Multi-Winch Control
+The interactive demo supports controlling multiple winches simultaneously.
+
+**Pairing New Winches:**
+Use the `PAIR` command to scan for and add new winches to your configuration.
+1. Type `PAIR`.
+2. Select the new winch from the list.
+3. Press the button on the winch when prompted.
+
+**Targeted Commands:**
+You can specific which winch(es) to control by prefixing the command with IDs (comma-separated).
+*   `1 U 10`: Move Winch 1 UP by 10 cm.
+*   `2 LIFT`: Smart Lift Winch 2.
+*   `1,2 SH`: Set High Limit for Winches 1 and 2.
+*   `ALL LIFT`: Smart Lift **ALL** connected winches.
+
+If no ID is specified (e.g., just `U 10`), the command applies to **Winch 1** by default.
+
+**Unpairing & Renumbering:**
+Use `UNPAIR` to remove a winch. The system will automatically renumber remaining winches to fill gaps (e.g., deleting ID 1 makes ID 2 become the new ID 1).
+
 **Soft Limits:**
 If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if you want to override. Type `Y` to proceed past the limit.
 
