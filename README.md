@@ -39,6 +39,11 @@ The main way to use this library is via the interactive demo. This is also used 
 python3 PyLifter/winch_demo_interactive.py
 ```
 
+To enable verbose logging to a file (`debug.log`), use the `--debug` flag:
+```bash
+python3 PyLifter/winch_demo_interactive.py --debug
+```
+
 **Initial Pairing:**
 If no devices are configured, the script will prompt you to enter **Pairing Mode**.
 1.  Type `PAIR` in the command prompt.

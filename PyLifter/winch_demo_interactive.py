@@ -8,28 +8,30 @@ from bleak import BleakScanner
 from pylifter.protocol import MoveCode, SmartPointCode
 from pylifter.client import PyLifterClient, TESTED_FIRMWARE_VERSIONS, MoveCode, SmartPointCode
 
-# Configure logs to be minimal
-# Configure Logging
-# Console: INFO/WARNING only (Clean)
-# File: DEBUG (Verbose)
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)
-root_logger.handlers.clear()
+import argparse
 
-# File Handler
-fh = logging.FileHandler('debug.log', mode='w')
-fh.setLevel(logging.DEBUG)
-fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(name)s:%(message)s'))
-root_logger.addHandler(fh)
+# Configure logs
+def configure_logging(enable_debug_file: bool = False):
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG) # Catch all, filter by handlers
+    root_logger.handlers.clear()
 
-# Console Handler
-ch = logging.StreamHandler()
-ch.setLevel(logging.WARNING) # Suppress INFO logs (Connecting, etc) from library to console
-ch.setFormatter(logging.Formatter('%(message)s'))
-root_logger.addHandler(ch)
+    # File Handler (Optional)
+    if enable_debug_file:
+        fh = logging.FileHandler('debug.log', mode='w')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(name)s:%(message)s'))
+        root_logger.addHandler(fh)
+        print("Debug logging enabled (debug.log)")
 
-logging.getLogger("pylifter").setLevel(logging.DEBUG)
-logging.getLogger("bleak").setLevel(logging.DEBUG)
+    # Console Handler
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARNING) # Suppress INFO logs (Connecting, etc) from library to console
+    ch.setFormatter(logging.Formatter('%(message)s'))
+    root_logger.addHandler(ch)
+
+    logging.getLogger("pylifter").setLevel(logging.DEBUG)
+    logging.getLogger("bleak").setLevel(logging.DEBUG)
 
 
 async def check_firmware_support(version: str):
@@ -772,4 +774,13 @@ async def main():
         await mon_task
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="PyLifter Interactive Demo")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose logging to debug.log")
+    args = parser.parse_args()
+    
+    configure_logging(enable_debug_file=args.debug)
+    
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass # Clean exit on Ctrl+C
