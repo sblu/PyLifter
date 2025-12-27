@@ -24,7 +24,7 @@ root_logger.addHandler(fh)
 
 # Console Handler
 ch = logging.StreamHandler()
-ch.setLevel(logging.INFO)
+ch.setLevel(logging.WARNING) # Suppress INFO logs (Connecting, etc) from library to console
 ch.setFormatter(logging.Formatter('%(message)s'))
 root_logger.addHandler(ch)
 
@@ -62,117 +62,162 @@ async def check_firmware_support(version: str):
             else:
                 pass # Invalid input, loop again
 
-async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, speed: int = 100, allow_override: bool = False):
+# ANSI Escape Codes
+ANSI_UP = "\033[A"
+ANSI_CLEAR = "\033[K"
+
+class LiveStatusMonitor:
+    def __init__(self, clients, target_ids):
+        self.clients = clients
+        self.target_ids = target_ids
+        self.statuses = {cid: "Initializing..." for cid in target_ids}
+        self.active = True
+        self.lock = asyncio.Lock()
+        
+    def update_status(self, client_id, message):
+        self.statuses[client_id] = message
+
+    async def run(self):
+        # Initial Print (Allocate lines)
+        for cid in self.target_ids:
+            print(f"  [{cid}] Waiting...")
+            
+        try:
+            while self.active:
+                # Move cursor up N lines
+                print(f"{ANSI_UP * len(self.target_ids)}", end='', flush=True)
+                
+                for cid in self.target_ids:
+                    client = self.clients.get(cid)
+                    status_msg = self.statuses.get(cid, "Unknown")
+                    
+                    # Format:   [1] AA:BB:CC... | UP   | Pos: 123 | 45.0 cm | Status Msg
+                    if client:
+                        mac = client.mac_address
+                        # Compact MAC (last 8 chars: "FE:15:33")
+                        mac_short = mac[-8:] if mac else "??:??:??"
+                        
+                        pos = client._last_known_position
+                        pos_str = str(pos) if pos is not None else "?"
+                        dist = client.current_distance
+                        
+                        # Compact Connection Status
+                        conn = "Conn" if client._is_connected else "Disc"
+                        
+                        # Compact Grid Format (<80 chars safe)
+                        # [ 1] ..FE:15:33 | Conn | 12345 (123.4cm) | Status
+                        # ID:4 | MAC:10 | S:3 | C:4 | S:3 | P:5 | S:2 | D:7 | S:3 | Msg
+                        line = f"  [{cid:>2}] ..{mac_short} | {conn:<4} | {pos_str:>5} ({dist:>5.1f}cm) | {status_msg}"
+                    else:
+                        line = f"  [{cid:>2}] {'Unknown':<10} | {'':<4} | {'':<5} {'':<8} | {status_msg}"
+                        
+                    print(f"{line}{ANSI_CLEAR}")
+                
+                await asyncio.sleep(0.1)
+        except Exception:
+            pass # Handle exit gracefully
+
+    def stop(self):
+        self.active = False
+        # Do one final print without moving up to leave state
+        try:
+             print(f"{ANSI_UP * len(self.target_ids)}", end='', flush=True)
+             for cid in self.target_ids:
+                client = self.clients.get(cid)
+                status_msg = self.statuses.get(cid, "Done")
+                if client:
+                    mac = client.mac_address
+                    mac_short = mac[-8:] if mac else "??:??:??"
+                    pos = client._last_known_position
+                    pos_str = str(pos) if pos is not None else "?"
+                    conn = "Conn" if client._is_connected else "Disc"
+                    
+                    line = f"  [{cid:>2}] ..{mac_short} | {conn:<4} | {pos_str:>5} ({client.current_distance:>5.1f}cm) | {status_msg}"
+                else:
+                    line = f"  [{cid:>2}] Not Found"
+                print(f"{line}{ANSI_CLEAR}")
+        except:
+            pass
+
+async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, speed: int = 100, monitor: LiveStatusMonitor = None):
     """
     Moves the winch in 'direction' until 'target_pos' is reached.
+    Updates 'monitor' with status strings instead of printing.
     """
-    prefix = f"[Winch {client_id}]"
-    
+    def log(msg):
+        if monitor: monitor.update_status(client_id, msg)
+        else: print(f"[Winch {client_id}] {msg}")
+
     # Safety Check
     start_pos = client._last_known_position
     if start_pos is None:
-        print(f"{prefix} Error: Unknown start position.")
+        log("Error: Unknown start position.")
         return
 
-    print(f"{prefix} Moving {'UP' if direction == MoveCode.UP else 'DOWN'} to Target Pos: {target_pos} (Speed: {speed}%)")
+    log(f"Moving {'UP' if direction == MoveCode.UP else 'DOWN'} -> {target_pos} ({speed}%)")
     
-    # CRITICAL Fix: Clear any existing End-of-Travel errors before moving
+    if not client._is_connected:
+        log("Not Connected! Aborting.")
+        return
+
     await client.clear_error()
     await asyncio.sleep(0.25)
     
     await client.move(direction, speed=speed)
     
-    is_overridden = False
-    
     try:
         while True:
-            # Safety Check: connection lost?
             # Robust Connection Check
             if not client._is_connected or (client._client and not client._client.is_connected):
-                print(f"{prefix} Connection Lost (Bleak/Internal)! Aborting monitor.")
+                log("Connection Lost!")
                 break
 
             current_pos = client._last_known_position
-            dist = client.current_distance
             
-            # Stall Detection (If moving but pos unchanged for 5s)
-            # Not implemented yet to keep it simple, relying on connection check first.
-
-            current_pos = client._last_known_position
-            dist = client.current_distance
-            
-            # Check Condition
+            # Check Limits
             if direction == MoveCode.UP:
-                if current_pos >= target_pos: break
+                if current_pos >= target_pos: 
+                    log("Target Reached.")
+                    break
                 if client.last_error_code == 0x86:
-                     print(f"{prefix} Reached Top Limit (0x86).")
+                     log("Reached Top Limit (Hardware).")
                      break
-                if client.last_error_code == 0x81 and not is_overridden:
-                     print(f"{prefix} Reached TOP Soft Limit (0x81).")
+                if client.last_error_code == 0x81:
+                     log("Reached Top Soft Limit.")
                      await client.stop()
-                     
-                     if allow_override:
-                         print(f"{prefix} [!] Condition Met. Override Limit? (Y/N): ", end='', flush=True)
-                         choice = await asyncio.get_event_loop().run_in_executor(None, input)
-                         if choice.strip().upper() == 'Y':
-                             print(f"{prefix} Overriding...")
-                             is_overridden = True
-                             await client.clear_error()
-                             await asyncio.sleep(0.5)
-                             
-                             # Force Move using GO_OVERRIDE (0x25)
-                             await client.override_move(direction, speed=speed)
-                             # Continue loop
-                             continue
-                         else:
-                             print(f"{prefix} Stopping.")
-                             break
-                     else:
-                         print(f"{prefix} Soft Limit Hit. Override not implemented for multi-winch batch move.")
-                         break
+                     break
 
             else:
-                if current_pos <= target_pos: break
+                if current_pos <= target_pos: 
+                    log("Target Reached.")
+                    break
                 if client.last_error_code == 0x86:
-                     print(f"{prefix} Reached Bottom Limit (0x86).")
+                     log("Reached Bottom Limit (Hardware).")
                      break
-                if client.last_error_code == 0x81 and not is_overridden:
-                     print(f"{prefix} Reached BOTTOM Soft Limit (0x81).")
+                if client.last_error_code == 0x81:
+                     log("Reached Bottom Soft Limit.")
                      await client.stop()
-                     
-                     if allow_override:
-                         print(f"{prefix} [!] Condition Met. Override Limit? (Y/N): ", end='', flush=True)
-                         choice = await asyncio.get_event_loop().run_in_executor(None, input)
-                         if choice.strip().upper() == 'Y':
-                             print(f"{prefix} Overriding...")
-                             is_overridden = True
-                             await client.clear_error()
-                             await asyncio.sleep(0.5)
-                             
-                             # Force Move
-                             ovr_dir = MoveCode.OVERRIDE_UP if direction == MoveCode.UP else MoveCode.OVERRIDE_DOWN
-                             await client.move(ovr_dir, speed=100)
-                             continue
-                         else:
-                             print(f"{prefix} Stopping.")
-                             break
-                     else:
-                         print(f"{prefix} Soft Limit Hit. Override not implemented for multi-winch batch move.")
-                         break
+                     break
             
+            # Update running status
+            log(f"Moving {'UP' if direction == MoveCode.UP else 'DOWN'}... ({speed}%)")
             await asyncio.sleep(0.1)
             
     finally:
         await client.stop()
         await asyncio.sleep(0.5) 
-        print(f"{prefix} Stopped at: {client._last_known_position} | {client.current_distance:.1f} cm")
+        log("Stopped.")
 
-async def monitor_smart_move(client: PyLifterClient, direction: MoveCode, client_id: int):
+async def monitor_smart_move(client: PyLifterClient, direction: MoveCode, client_id: int, monitor: LiveStatusMonitor = None):
     """
     Monitors a 'Smart Move' (LIFT/LOWER).
     """
-    prefix = f"[Winch {client_id}]"
-    print(f"{prefix} Smart Moving {'UP' if direction == MoveCode.SMART_UP else 'DOWN'}...")
+    def log(msg):
+        if monitor: monitor.update_status(client_id, msg)
+        else: print(f"[Winch {client_id}] {msg}")
+
+    limit_name = "TOP" if direction == MoveCode.SMART_UP else "BOTTOM"
+    log(f"Smart Moving {limit_name}...")
     
     await client.clear_error()
     await asyncio.sleep(0.25)
@@ -187,33 +232,32 @@ async def monitor_smart_move(client: PyLifterClient, direction: MoveCode, client
             current_pos = client._last_known_position
             
             if client.last_error_code == 0x86:
-                 print(f"{prefix} Reached Limit (0x86).")
+                 log("Reached Hardware Limit.")
                  break
             if client.last_error_code == 0x83:
-                 limit_type = "TOP" if direction == MoveCode.SMART_UP else "BOTTOM"
-                 print(f"{prefix} Failed: {limit_type} Limit Not Set (0x83). Skipping.")
+                 log(f"Failed: {limit_name} Limit Not Set.")
                  break
-            
             if client.last_error_code == 0x81:
-                 limit_type = "TOP" if direction == MoveCode.SMART_UP else "BOTTOM"
-                 print(f"{prefix} Reached {limit_type} Soft Limit (0x81).")
+                 log(f"Reached {limit_name} Soft Limit.")
                  break
             
+            # Stall Detection (Smart Move implies auto-stop, but we check specific conditions)
             if current_pos == last_pos:
                 stable_count += 1
                 if stable_count > 20: 
-                    print(f"{prefix} Movement Stopped.")
+                    log("Movement Stopped (Stable).")
                     break
             else:
                 stable_count = 0
                 last_pos = current_pos
             
+            log(f"Smart Moving {limit_name}...")
             await asyncio.sleep(0.1)
             
     finally:
         await client.stop()
         await asyncio.sleep(0.5)
-        print(f"{prefix} Stopped at: {client._last_known_position} | {client.current_distance:.1f} cm")
+        log("Stopped.")
 
 async def pair_new_winch(config_file, config, clients):
     print("\n--- Pairing Mode ---")
@@ -438,13 +482,15 @@ async def main():
     # 3. Connect All
     if clients:
         print("Connecting to all winches...")
+        # Give adapter time to settle if we just started
+        await asyncio.sleep(2.0)
         for cid, client in clients.items():
             print(f"[{cid}] Connecting to {client.mac_address}...", end='', flush=True)
             connected = False
             for attempt in range(3):
                 try:
                     await client.connect()
-                    print(" Connected.")
+                    print(" Connected.", end='', flush=True)
                     connected = True
                     
                     # STABILITY FIX: Wait for BLE stack to settle before querying versions
@@ -455,12 +501,11 @@ async def main():
                         # Print Version
                         ver = await client.get_version()
                         proto_ver = await client.get_protocol_version()
-                        print(f"      Firmware Version: {ver}")
-                        print(f"      Protocol Version: {proto_ver}")
+                        print(f" (Versions: Firmware={ver} | Protocol={proto_ver})")
                         
                         await check_firmware_support(ver)
                     except Exception as ve:
-                        print(f"      [Warning] Could not verify firmware version: {ve}")
+                        print(f"\n      [Warning] Could not verify firmware version: {ve}")
                     
                     break # Success, exit retry loop
                     
@@ -484,9 +529,12 @@ async def main():
             
     print("\n--- Ready ---")
     
+    skip_status = False
     while True:
         # Print Status
-        print_status()
+        if not skip_status:
+            print_status()
+        skip_status = False # Reset for next loop
 
         cmd_str = await asyncio.get_event_loop().run_in_executor(None, input, "\nCommand ([ID,ID | all] <CMD>... | PAIR | Q | ?): ")
         
@@ -593,6 +641,12 @@ async def main():
         # Execute Command on Targets
         tasks = []
         
+        # Setup Monitor for Movement Commands
+        monitor = None
+        if cmd in ['LIFT', 'LOWER', 'U', 'D']:
+            monitor = LiveStatusMonitor(clients, target_ids)
+            tasks.append(monitor.run())
+        
         for tid in target_ids:
             if tid not in clients:
                 print(f"Warning: Winch {tid} not configured.")
@@ -605,9 +659,9 @@ async def main():
             
             # Dispatch Command
             if cmd == 'LIFT':
-                tasks.append(monitor_smart_move(client, MoveCode.SMART_UP, tid))
+                tasks.append(monitor_smart_move(client, MoveCode.SMART_UP, tid, monitor))
             elif cmd == 'LOWER':
-                tasks.append(monitor_smart_move(client, MoveCode.SMART_DOWN, tid))
+                tasks.append(monitor_smart_move(client, MoveCode.SMART_DOWN, tid, monitor))
             elif cmd == 'SH':
                  async def do_sh(c, i):
                      print(f"[Winch {i}] Setting High Limit...")
@@ -661,25 +715,61 @@ async def main():
                         
                     target_pos = int((target_dist - intercept) / slope)
                     
-                    # Allow override only if targeting a single winch
-                    allow_override = (len(target_ids) == 1)
-                    tasks.append(monitor_move(client, target_pos, direction, tid, speed=speed, allow_override=allow_override))
+                    # Note: We disabled interactive override for batch moves with monitor
+                    # The monitor doesn't support input() easily regardless of batch size
+                    tasks.append(monitor_move(client, target_pos, direction, tid, speed=speed, monitor=monitor))
                 except ValueError:
                     print(f"Invalid Value: {args[0]}")
             else:
                 pass
                 
         if tasks:
-            await asyncio.gather(*tasks)
+            if monitor:
+                # Run everything, monitor is one of the tasks
+                # But we need to ensure monitor.stop() is called when move tasks finish
+                # gather() will run monitor forever (it loops while active) which will block?
+                # No, monitor.run() loops while self.active.
+                # So we need to await the MOVEMENT tasks, then stop monitor.
+                
+                # Separate monitor task from work tasks
+                monitor_task = tasks.pop(0) # The first one we added
+                worker_tasks = tasks
+                
+                # Start Monitor
+                m_task = asyncio.create_task(monitor_task)
+                
+                # Run Workers
+                await asyncio.gather(*worker_tasks)
+                
+                # Stop Monitor
+                monitor.stop()
+                await m_task
+                
+                # Prevent re-printing status since monitor just showed the final state
+                skip_status = True
+            else:
+                await asyncio.gather(*tasks)
 
     print("Disconnecting all...")
-    for cid, c in clients.items():
-        if c._is_connected:
-            print(f"[{cid}] Disconnecting from {c.mac_address}...", end='', flush=True)
-            await c.disconnect()
-            print(" Disconnected.")
-        else:
-             print(f"[{cid}] Skipping {c.mac_address} (Already Disconnected).")
+    
+    # Use Monitor for Disconnects
+    all_ids = list(clients.keys())
+    if all_ids:
+        disc_monitor = LiveStatusMonitor(clients, all_ids)
+        # We run the monitor in background while we process disconnects
+        mon_task = asyncio.create_task(disc_monitor.run())
+        
+        for cid in all_ids:
+            c = clients[cid]
+            if c._is_connected:
+                disc_monitor.update_status(cid, "Disconnecting...")
+                await c.disconnect()
+                disc_monitor.update_status(cid, "Disconnected")
+            else:
+                 disc_monitor.update_status(cid, "Already Disconnected")
+                 
+        disc_monitor.stop()
+        await mon_task
 
 if __name__ == "__main__":
     asyncio.run(main())

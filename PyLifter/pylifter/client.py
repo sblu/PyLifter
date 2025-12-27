@@ -39,6 +39,9 @@ class PyLifterClient:
         # Calibration state (Linear: Distance = Slope * Position + Intercept)
         self._cal_slope: float = 0.0
         self._cal_intercept: float = 0.0 
+        # Connect management
+        self._is_connected = False
+        self._suppress_disconnect_callbacks = False
 
     @property
     def passkey(self) -> Optional[bytes]:
@@ -57,19 +60,88 @@ class PyLifterClient:
         self._cal_intercept = intercept
         logger.info(f"Calibration Set: Dist = {slope:.5f} * Pos + {intercept:.2f}")
 
-    async def connect(self, wait_for_position: bool = True):
-        logger.info(f"Connecting to {self.mac_address}...")
-        self._client = BleakClient(self.mac_address)
-        await self._client.connect()
+    def _on_disconnect(self, client: BleakClient):
+        """Callback for when Bleak detects a disconnect."""
+        if self._suppress_disconnect_callbacks:
+            logger.debug(f"Suppressed Disconnect Callback for {self.mac_address} (During Connect/Retry)")
+            return
+            
+        if not self._suppress_disconnect_callbacks:
+            logger.info(f"Bleak Disconnected Callback for {self.mac_address}")
+            self._is_connected = False
+
+    async def _establish_connection(self):
+        """Internal helper to create connection, auth, and setup notifications."""
+        # 1. Clean up potential zombie checks
+        if self._client and self._client.is_connected:
+            logger.info("Closing previous connection before retry...")
+            await self._client.disconnect()
+            await asyncio.sleep(0.5) # Allow BlueZ to cleanup
+            
+        # 2. Add settle delay to let BlueZ/Adapter recover from scan or previous abort
+        await asyncio.sleep(1.0) 
+            
+        logger.info(f"Initiating connection to {self.mac_address} (Timeout=20s)...")
+        # Initialize with callback, but suppress it initially
+        self._suppress_disconnect_callbacks = True
+        self._client = BleakClient(
+            self.mac_address, 
+            disconnected_callback=self._on_disconnect,
+            timeout=20.0
+        ) 
+        
+        try:
+            # 3. Connect (Bleak handles Service Discovery internally)
+            await self._client.connect()
+            # Connection successful - enable callback
+            self._suppress_disconnect_callbacks = False
+            
+        except Exception as e:
+            logger.warning(f"Connection Failed: {e}. Attempting Cache Scrub via bluetoothctl...")
+            if self._client and self._client.is_connected:
+                 await self._client.disconnect()
+            
+            # 3a. Force remove device from BlueZ cache
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "bluetoothctl", "remove", self.mac_address,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                await proc.wait()
+                logger.info("Device removed from BlueZ cache.")
+            except Exception as scrub_err:
+                 logger.error(f"Failed to scrub device: {scrub_err}")
+            
+            await asyncio.sleep(2.0) # Wait for BlueZ to reset
+            
+            # 3b. Retry Connection
+            logger.info("Retrying connection after scrub...")
+            self._suppress_disconnect_callbacks = True
+            self._client = BleakClient(
+                self.mac_address, 
+                disconnected_callback=self._on_disconnect,
+                timeout=20.0
+            ) 
+            await self._client.connect()
+            self._suppress_disconnect_callbacks = False
+
         self._is_connected = True 
-        logger.info("Connected.")
         
         await self._client.start_notify(RESPONSE_CHAR_UUID, self._notification_handler)
-        logger.info("Notifications enabled. Starting Handshake...")
-
-        # 1. Authenticate & Start Keep-Alive IMMEDIATELY
-        logger.info("Handshake: Authenticating...")
+        
+        # 4. Authenticate & Start Keep-Alive IMMEDIATELY
         await self._authenticate()
+
+    async def connect(self, wait_for_position: bool = True):
+        logger.info(f"Connecting to {self.mac_address}...")
+        
+        # Use helper with parameters
+        await self._establish_connection()
+        logger.info("Connected & Authenticated. Starting Keep-Alive...")
+        
+        # Auth and notification start is now inside _establish_connection
+        pass
         
         if wait_for_position:
             # 2. Wait for initial position sync
@@ -137,6 +209,9 @@ class PyLifterClient:
                         if not self._write_lock.locked():
                             async with self._write_lock:
                                 await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+                                # Throttle: Give the stack a moment to breathe
+                                await asyncio.sleep(0.02)
+                                
                             service_fail_count = 0 # Reset on successful write
                             
                     except Exception as e:
@@ -164,12 +239,22 @@ class PyLifterClient:
                             # For other errors, just warn
                              logger.warning(f"Keep-Alive Write Failed: {e}")
                 
-                await asyncio.sleep(0.25) # 4Hz - Reduced from 10Hz to prevent congestion
+                if self._target_move_code != MoveCode.STOP:
+                    await asyncio.sleep(0.2) # 5Hz when moving (Responsive)
+                else:
+                    await asyncio.sleep(0.25) # 4Hz when idle (Stable, Standard)
                     
         except asyncio.CancelledError:
             pass
         except Exception as e:
             logger.error(f"Keep-Alive Loop Error: {e}")
+
+    async def write_command(self, packet: bytes, response: bool = True):
+        """Helper to safely write commands with lock and throttling."""
+        async with self._write_lock:
+             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=response)
+             # Throttle: Give the stack a moment to breathe
+             await asyncio.sleep(0.02)
 
     async def _authenticate(self):
         self._auth_event.clear()
@@ -177,7 +262,8 @@ class PyLifterClient:
         if self._passkey:
             logger.info("Sending Passkey...")
             packet = build_packet(CommandCode.SET_PASSKEY, self._passkey)
-            await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+            # Use the throttled helper if possible, or direct for now since _authenticate uses direct writes
+            await self.write_command(packet, response=False)
             
             # Start Keep-Alive Loop IMMEDIATELY
             if self._polling_task is None:
@@ -190,9 +276,8 @@ class PyLifterClient:
              logger.info("No passkey provided. Sending GET_PASSKEY request...")
              
              # Send GET_PASSKEY (0x03, empty payload)
-             # Device should respond with 0x03 + Passkey ONLY after button is pressed.
              packet = build_packet(CommandCode.GET_PASSKEY)
-             await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+             await self.write_command(packet, response=False)
              
              logger.info("Waiting for button press on Winch...")
              # Wait for the notification handler to receive GET_PASSKEY and set self._passkey
@@ -244,7 +329,7 @@ class PyLifterClient:
         
         if self._client and self._is_connected:
             try:
-                await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=False)
+                await self.write_command(packet, response=False)
             except Exception as e:
                 # If immediate stop fails (e.g. Service Discovery error), just warn.
                 # The keep-alive loop will pick up the new _target_move_code = STOP shortly.
@@ -253,19 +338,19 @@ class PyLifterClient:
     async def get_stats(self):
         self._stats_future = asyncio.get_event_loop().create_future()
         packet = build_packet(CommandCode.GET_STATS)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
+        await self.write_command(packet, response=True)
         return await asyncio.wait_for(self._stats_future, timeout=3.0)
 
     async def get_version(self):
         self._version_future = asyncio.get_event_loop().create_future()
         packet = build_packet(CommandCode.GET_VERSION)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
+        await self.write_command(packet, response=True)
         return await asyncio.wait_for(self._version_future, timeout=3.0)
 
     async def get_protocol_version(self):
         self._proto_version_future = asyncio.get_event_loop().create_future()
         packet = build_packet(CommandCode.GET_PROTOCOL_VERSION)
-        await self._client.write_gatt_char(COMMAND_CHAR_UUID, packet, response=True)
+        await self.write_command(packet, response=True)
         return await asyncio.wait_for(self._proto_version_future, timeout=3.0)
 
     def _notification_handler(self, sender, data):

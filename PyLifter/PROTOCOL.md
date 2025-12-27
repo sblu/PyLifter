@@ -163,8 +163,8 @@ sequenceDiagram
     C->>D: TX 0x04 [Passkey] (SET_PASSKEY)
     D->>C: RX 0x01 (ACK) (Optional/Implied)
 
-    Note over C,D: Keep-Alive Loop (10Hz)
-    loop Every 100ms
+    Note over C,D: Keep-Alive Loop
+    loop Every 100ms (Active) / 250ms (Idle)
         C->>D: TX 0x01 [MoveCode, Speed, EchoPos]
         D->>C: RX 0x81 [Status, CurrentPos, Errors]
         
@@ -177,5 +177,9 @@ sequenceDiagram
 
 ### Key Behaviors
 1.  **Robust Echo**: The client **must** echo the device's last reported position in every Keep-Alive packet. Sending `0` when the device is at `-5000` causes a **Sync Error (0x09)**.
-2.  **Pairing**: The device will not send the Passkey until `GET_PASSKEY` is received AND the physical button is pressed.
+2.  **Timing & Throttling**:
+    *   **Idle Rate**: Send Keep-Alive packets at ~4Hz (250ms) when idle to maintain connection without saturating the stack.
+    *   **Active Rate**: Send at ~10Hz (100ms) during movement for responsiveness.
+    *   **Throttling**: A delay of ~20ms is recommended after *every* write operation to prevent "InProgress" errors from the Bluetooth stack, especially during high-traffic phases like startup.
+3.  **Pairing**: The device will not send the Passkey until `GET_PASSKEY` is received AND the physical button is pressed.
 3.  **Passkey Persistence**: Once retrieved, the Passkey is permanent and should be stored to avoid requiring physical button presses for future connections.

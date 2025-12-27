@@ -5,7 +5,7 @@ PyLifter is an open-source Python library and toolkit for controlling **MyLifter
 ## Features
 
 - **Direct Control**: Move the winch UP, DOWN, and STOP programmatically.
-- **Interactive CLI**: A robust terminal-based interface for controlling the winch.
+- **Interactive CLI**: A robust terminal-based interface with **Live Status Display** for real-time monitoring.
 - **Calibrated Units**: Supports linear calibration to convert internal position units to real-world centimeters.
 - **Soft Limit Override**: Implements the "Override" functionality to bypass soft limits when necessary.
 - **Robust Error Handling**: Automatically handles and clears device errors (like Sync Error 9) to ensure reliable operation.
