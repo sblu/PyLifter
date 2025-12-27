@@ -33,6 +33,7 @@ class PyLifterClient:
         # Internal state
         # Initialize to None to indicate we haven't synced with device yet
         self._last_known_position: Optional[int] = None 
+        self._last_known_weight: int = 0
         self.last_error_code: int = 0 
         self._last_logged_error_code: int = -1 # For suppressing duplicate logs 
         
@@ -47,6 +48,11 @@ class PyLifterClient:
     def passkey(self) -> Optional[bytes]:
         return self._passkey 
         
+    @property
+    def current_weight(self) -> int:
+        """Returns the last reported weight load (raw unit)."""
+        return self._last_known_weight
+
     @property
     def current_distance(self) -> float:
         """Returns the estimated distance in configured units based on calibration."""
@@ -449,6 +455,7 @@ class PyLifterClient:
                 
                 # CRITICAL: Always update position from device feedback
                 self._last_known_position = pos
+                self._last_known_weight = weight
                 self.last_error_code = error_code
                 # logger.debug(f"RX POS update: {pos}")
                 

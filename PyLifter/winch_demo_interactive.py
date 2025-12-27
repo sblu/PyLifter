@@ -102,16 +102,16 @@ class LiveStatusMonitor:
                         pos = client._last_known_position
                         pos_str = str(pos) if pos is not None else "?"
                         dist = client.current_distance
+                        wgt = client.current_weight
                         
                         # Compact Connection Status
                         conn = "Conn" if client._is_connected else "Disc"
                         
-                        # Compact Grid Format (<80 chars safe)
-                        # [ 1] ..FE:15:33 | Conn | 12345 (123.4cm) | Status
-                        # ID:4 | MAC:10 | S:3 | C:4 | S:3 | P:5 | S:2 | D:7 | S:3 | Msg
-                        line = f"  [{cid:>2}] ..{mac_short} | {conn:<4} | {pos_str:>5} ({dist:>5.1f}cm) | {status_msg}"
+                        # Full MAC Grid Format
+                        # [ 1] XX:XX:XX:XX:XX:XX | Conn | 12345 (123.4cm) | W:1234 | Status
+                        line = f"  [{cid:>2}] {mac} | {conn:<4} | {pos_str:>5} ({dist:>5.1f}cm) | W:{wgt:>4} | {status_msg}"
                     else:
-                        line = f"  [{cid:>2}] {'Unknown':<10} | {'':<4} | {'':<5} {'':<8} | {status_msg}"
+                        line = f"  [{cid:>2}] {'Unknown':<17} | {'':<4} | {'':<5} {'':<8} | {'':<6} | {status_msg}"
                         
                     print(f"{line}{ANSI_CLEAR}")
                 
@@ -129,17 +129,53 @@ class LiveStatusMonitor:
                 status_msg = self.statuses.get(cid, "Done")
                 if client:
                     mac = client.mac_address
-                    mac_short = mac[-8:] if mac else "??:??:??"
+                    # Full MAC restored
                     pos = client._last_known_position
                     pos_str = str(pos) if pos is not None else "?"
                     conn = "Conn" if client._is_connected else "Disc"
+                    wgt = client.current_weight
                     
-                    line = f"  [{cid:>2}] ..{mac_short} | {conn:<4} | {pos_str:>5} ({client.current_distance:>5.1f}cm) | {status_msg}"
+                    line = f"  [{cid:>2}] {mac} | {conn:<4} | {pos_str:>5} ({client.current_distance:>5.1f}cm) | W:{wgt:>4} | {status_msg}"
                 else:
                     line = f"  [{cid:>2}] Not Found"
                 print(f"{line}{ANSI_CLEAR}")
         except:
             pass
+
+async def background_reconnect_loop(clients: dict):
+    """Background task to attempt reconnection for disconnected clients."""
+    logging.getLogger("pylifter").info("Background Reconnect Task Started.")
+    while True:
+        try:
+            await asyncio.sleep(10.0) # Check every 10 seconds
+            
+            for cid, client in clients.items():
+                if not client._is_connected:
+                    # found a disconnected client
+                    # Only try if we are not "intentionally" disconnected? 
+                    # For now, simplistic approach: always try to maintain connection.
+                    pass
+                    # verify it's not already connecting? _is_connected is set at start/end.
+                    # BleakClient doesn't have "connecting" state easily accessible on older versions
+                    # But PyLifterClient sets _is_connected=False on disconnect.
+                    
+                    try:
+                        # We use a non-blocking check via a print or log, but since CLI is active,
+                        # we should perhaps log to debug only?
+                        # Or update the status line if monitor is active? 
+                        # But monitor runs in separate loop.
+                        # We can just try connecting.
+                        logging.getLogger("pylifter").info(f"Background Reconnect: Attempting to reconnect Winch {cid} ({client.mac_address})...")
+                        await client.connect(wait_for_position=True)
+                        logging.getLogger("pylifter").info(f"Background Reconnect: Winch {cid} Connected!")
+                    except Exception as e:
+                        logging.getLogger("pylifter").debug(f"Background Reconnect Failed for {cid}: {e}")
+                        
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.getLogger("pylifter").error(f"Reconnect Loop Error: {e}")
+            await asyncio.sleep(5.0)
 
 async def monitor_move(client: PyLifterClient, target_pos: int, direction: MoveCode, client_id: int, speed: int = 100, monitor: LiveStatusMonitor = None):
     """
@@ -521,13 +557,16 @@ async def main():
             if not connected:
                 print(f"      [Error] Could not connect to winch {cid} after 3 attempts.")
         
+    # Start Background Reconnect
+    reconnect_task = asyncio.create_task(background_reconnect_loop(clients))
+        
     def print_status():
         print("\nStatus:")
         if not clients:
             print("  (No winches configured)")
         for cid, c in clients.items():
             status = "Connected" if c._is_connected else "Disconnected"
-            print(f"  [{cid}] {c.mac_address}: {status} | Pos={c._last_known_position} | {c.current_distance:.1f} cm")
+            print(f"  [{cid}] {c.mac_address}: {status} | Pos={c._last_known_position} | Wgt={c.current_weight} | {c.current_distance:.1f} cm")
             
     print("\n--- Ready ---")
     
@@ -586,7 +625,7 @@ async def main():
         if cmd == 'Q':
             break
             
-        if cmd == 'P':
+        if cmd in ['P', 'S', 'STATUS']:
             # Just continue to loop start which prints status
             continue
             
@@ -613,7 +652,8 @@ async def main():
             print("  CL            : Clear LOW (Bottom) Soft Limit")
             print("  PAIR          : Scan and Pair a NEW winch")
             print("  UNPAIR        : Remove a winch from configuration")
-            print("  P             : Print Status of all winches")
+            print("  UNPAIR        : Remove a winch from configuration")
+            print("  P / S         : Print Status of all winches")
             print("  Q             : Quit")
             print("\nExamples:")
             print("  1 U 10        -> Move Winch 1 UP by 10cm at 100% speed")
@@ -752,6 +792,14 @@ async def main():
             else:
                 await asyncio.gather(*tasks)
 
+    # Cancel Reconnect Task
+    if reconnect_task:
+        reconnect_task.cancel()
+        try:
+            await reconnect_task
+        except asyncio.CancelledError:
+            pass
+            
     print("Disconnecting all...")
     
     # Use Monitor for Disconnects

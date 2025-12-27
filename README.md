@@ -59,8 +59,13 @@ Once paired, the passkey is saved to `pylifter_config.json`, and future connecti
 - `LOWER`: Smart Lower (Move DOWN to Low Limit).
 - `SH`: Set **High** (Top) Soft Limit at current position.
 - `SL`: Set **Low** (Bottom) Soft Limit at current position.
+- `S` / `STATUS`: Print current status of all winches.
 - `?`: Show help menu.
 - `Q`: Quit.
+
+**Live Features:**
+- **Live Status Grid**: Shows ID, Full MAC, Connection, Position, and **Weight/Load**.
+- **Auto-Reconnect**: A background service automatically attempts to reconnect any disconnected winch every 10 seconds.
 
 ### 2. Calibration (Optional but Recommended)
 To enable control using real-world units (cm) instead of raw motor steps, run the calibration script **after pairing**:
