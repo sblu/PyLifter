@@ -26,7 +26,7 @@ def configure_logging(enable_debug_file: bool = False):
 
     # Console Handler
     ch = logging.StreamHandler()
-    ch.setLevel(logging.WARNING) # Suppress INFO logs (Connecting, etc) from library to console
+    ch.setLevel(logging.CRITICAL) # Suppress ALL logs to console to prevent display artifacts
     ch.setFormatter(logging.Formatter('%(message)s'))
     root_logger.addHandler(ch)
 
@@ -72,7 +72,7 @@ class LiveStatusMonitor:
     def __init__(self, clients, target_ids):
         self.clients = clients
         self.target_ids = target_ids
-        self.statuses = {cid: "Initializing..." for cid in target_ids}
+        self.statuses = {cid: "Waiting..." for cid in target_ids}
         self.active = True
         self.lock = asyncio.Lock()
         
@@ -107,17 +107,22 @@ class LiveStatusMonitor:
                         # Compact Connection Status
                         conn = "Conn" if client._is_connected else "Disc"
                         
-                        # Full MAC Grid Format
-                        # [ 1] XX:XX:XX:XX:XX:XX | Conn | 12345 (123.4cm) | W:1234 | Status
-                        line = f"  [{cid:>2}] {mac} | {conn:<4} | {pos_str:>5} ({dist:>5.1f}cm) | W:{wgt:>4} | {status_msg}"
+                        # Full MAC Grid Format (User Preferences)
+                        # [ 1] XX:XX:XX:XX:XX:XX | Conn | 123.4 cm | Weight: 1234 | Status
+                        line = f"  [{cid:>2}] {mac} | {conn:<4} | {dist:>5.1f} cm | Weight: {wgt:>4} | {status_msg}"
+
                     else:
                         line = f"  [{cid:>2}] {'Unknown':<17} | {'':<4} | {'':<5} {'':<8} | {'':<6} | {status_msg}"
                         
                     print(f"{line}{ANSI_CLEAR}")
                 
                 await asyncio.sleep(0.1)
-        except Exception:
-            pass # Handle exit gracefully
+        except Exception as e:
+            # Print exception to debug what's going on
+            print(f"\n[Monitor Error] {e}")
+            import traceback
+            traceback.print_exc() 
+
 
     def stop(self):
         self.active = False
@@ -129,13 +134,12 @@ class LiveStatusMonitor:
                 status_msg = self.statuses.get(cid, "Done")
                 if client:
                     mac = client.mac_address
-                    # Full MAC restored
                     pos = client._last_known_position
-                    pos_str = str(pos) if pos is not None else "?"
-                    conn = "Conn" if client._is_connected else "Disc"
                     wgt = client.current_weight
+                    conn = "Conn" if client._is_connected else "Disc"
                     
-                    line = f"  [{cid:>2}] {mac} | {conn:<4} | {pos_str:>5} ({client.current_distance:>5.1f}cm) | W:{wgt:>4} | {status_msg}"
+                    line = f"  [{cid:>2}] {mac} | {conn:<4} | {client.current_distance:>5.1f} cm | Weight: {wgt:>4} | {status_msg}"
+
                 else:
                     line = f"  [{cid:>2}] Not Found"
                 print(f"{line}{ANSI_CLEAR}")
@@ -400,6 +404,8 @@ async def pair_new_winch(config_file, config, clients):
         if client._is_connected:
              await client.disconnect()
 
+
+
 async def unpair_winch(config_file, config, clients):
     print("\n--- Unpair Mode ---")
     devices = config.get("devices", [])
@@ -518,6 +524,7 @@ async def main():
         clients[dev_id] = client
 
     # 3. Connect All
+    # 3. Connect All
     if clients:
         print("Connecting to all winches...")
         # Give adapter time to settle if we just started
@@ -566,7 +573,7 @@ async def main():
             print("  (No winches configured)")
         for cid, c in clients.items():
             status = "Connected" if c._is_connected else "Disconnected"
-            print(f"  [{cid}] {c.mac_address}: {status} | Pos={c._last_known_position} | Wgt={c.current_weight} | {c.current_distance:.1f} cm")
+            print(f"  [{cid:>2}] {c.mac_address} | {status:<10} | {c.current_distance:>5.1f} cm | Weight: {c.current_weight:>4} | Pos: {c._last_known_position}")
             
     print("\n--- Ready ---")
     
@@ -621,6 +628,8 @@ async def main():
         # Normalize Synonyms
         if cmd == "UP": cmd = "U"
         if cmd == "DOWN": cmd = "D"
+        if cmd == "RAISE": cmd = "LIFT"
+        if cmd == "MOVE": cmd = "M"
         
         if cmd == 'Q':
             break
@@ -644,7 +653,8 @@ async def main():
             print("\nAvailable Commands:")
             print("  U <val> [spd] : Move UP by <val> cm, optional speed 25-100% (Synonym: UP)")
             print("  D <val> [spd] : Move DOWN by <val> cm, optional speed 25-100% (Synonym: DOWN)")
-            print("  LIFT          : Smart Lift (Move UP to High Limit)")
+            print("  M <val> [spd] : Move TO <val> cm, optional speed 25-100% (Synonym: MOVE)")
+            print("  LIFT          : Smart Lift (Move UP to High Limit) (Synonym: RAISE)")
             print("  LOWER         : Smart Lower (Move DOWN to Low Limit)")
             print("  SH            : Set HIGH (Top) Soft Limit at current position")
             print("  SL            : Set LOW (Bottom) Soft Limit at current position")
@@ -668,14 +678,14 @@ async def main():
             continue
 
         # Validate Command
-        valid_cmds = ['LIFT', 'LOWER', 'SH', 'SL', 'CH', 'CL', 'CB', 'U', 'D']
+        valid_cmds = ['LIFT', 'LOWER', 'SH', 'SL', 'CH', 'CL', 'CB', 'U', 'D', 'M']
         if cmd not in valid_cmds:
             print(f"\n[ERROR] Unknown command: '{cmd}'")
             print_help()
             continue
             
         # Validate Args
-        if cmd in ['U', 'D'] and not args:
+        if cmd in ['U', 'D', 'M'] and not args:
              print(f"\n[ERROR] Command '{cmd}' requires a distance argument.")
              print_help()
              continue
@@ -685,18 +695,22 @@ async def main():
         
         # Setup Monitor for Movement Commands
         monitor = None
-        if cmd in ['LIFT', 'LOWER', 'U', 'D']:
+        if cmd in ['LIFT', 'LOWER', 'U', 'D', 'M']:
             monitor = LiveStatusMonitor(clients, target_ids)
             tasks.append(monitor.run())
         
         for tid in target_ids:
             if tid not in clients:
-                print(f"Warning: Winch {tid} not configured.")
+                msg = f"Warning: Winch {tid} not configured."
+                if monitor: monitor.update_status(tid, "Not Configured")
+                else: print(msg)
                 continue
                 
             client = clients[tid]
             if not client._is_connected:
-                print(f"Warning: Winch {tid} not connected (Skipping).")
+                msg = f"Warning: Winch {tid} not connected (Skipping)."
+                if monitor: monitor.update_status(tid, "Disconnected (Skipped)")
+                else: print(msg)
                 continue
             
             # Dispatch Command
@@ -724,9 +738,10 @@ async def main():
                      print(f"[Winch {i}] Clearing Low Limit...")
                      await c.clear_smart_point(SmartPointCode.BOTTOM)
                  tasks.append(do_cl(client, tid))
-            elif cmd in ['U', 'D']:
+                 tasks.append(do_cl(client, tid))
+            elif cmd in ['U', 'D', 'M']:
                 try:
-                    delta_cm = float(args[0])
+                    val = float(args[0])
                     
                     # Parse Speed (Optional)
                     speed = 100
@@ -744,12 +759,21 @@ async def main():
 
                     current_dist = client.current_distance
                     
+                    target_dist = 0.0
+                    direction = MoveCode.UP # Default
+                    
                     if cmd == 'U':
-                        target_dist = current_dist - delta_cm
+                        target_dist = current_dist - val
                         direction = MoveCode.UP
-                    else:
-                        target_dist = current_dist + delta_cm
+                    elif cmd == 'D':
+                        target_dist = current_dist + val
                         direction = MoveCode.DOWN
+                    elif cmd == 'M':
+                        target_dist = val
+                        if target_dist < current_dist:
+                            direction = MoveCode.UP
+                        else:
+                            direction = MoveCode.DOWN
                         
                     if slope == 0:
                         print(f"[Winch {tid}] Cal slope is 0!")
@@ -806,6 +830,8 @@ async def main():
     all_ids = list(clients.keys())
     if all_ids:
         disc_monitor = LiveStatusMonitor(clients, all_ids)
+        # Pre-set statuses to avoid "Waiting..." flash if possible or just let it be waiting
+        
         # We run the monitor in background while we process disconnects
         mon_task = asyncio.create_task(disc_monitor.run())
         

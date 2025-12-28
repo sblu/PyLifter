@@ -103,34 +103,43 @@ class PyLifterClient:
             self._suppress_disconnect_callbacks = False
             
         except Exception as e:
-            logger.warning(f"Connection Failed: {e}. Attempting Cache Scrub via bluetoothctl...")
-            if self._client and self._client.is_connected:
-                 await self._client.disconnect()
+            logger.warning(f"Connection Failed: {e}. (Cache Scrub disabled to improve stability)")
+            # if self._client and self._client.is_connected:
+            #      await self._client.disconnect()
             
-            # 3a. Force remove device from BlueZ cache
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "bluetoothctl", "remove", self.mac_address,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL
-                )
-                await proc.wait()
-                logger.info("Device removed from BlueZ cache.")
-            except Exception as scrub_err:
-                 logger.error(f"Failed to scrub device: {scrub_err}")
+            # # 3a. Force remove device from BlueZ cache
+            # try:
+            #     proc = await asyncio.create_subprocess_exec(
+            #         "bluetoothctl", "remove", self.mac_address,
+            #         stdout=asyncio.subprocess.DEVNULL,
+            #         stderr=asyncio.subprocess.DEVNULL
+            #     )
+            #     await proc.wait()
+            #     logger.info("Device removed from BlueZ cache.")
+            # except Exception as scrub_err:
+            #      logger.error(f"Failed to scrub device: {scrub_err}")
             
-            await asyncio.sleep(2.0) # Wait for BlueZ to reset
+            # await asyncio.sleep(2.0) # Wait for BlueZ to reset
             
-            # 3b. Retry Connection
-            logger.info("Retrying connection after scrub...")
-            self._suppress_disconnect_callbacks = True
-            self._client = BleakClient(
-                self.mac_address, 
-                disconnected_callback=self._on_disconnect,
-                timeout=20.0
-            ) 
-            await self._client.connect()
-            self._suppress_disconnect_callbacks = False
+            # # 3b. Retry Connection
+            # logger.info("Retrying connection after scrub...")
+            # self._suppress_disconnect_callbacks = True
+            # self._client = BleakClient(
+            #     self.mac_address, 
+            #     disconnected_callback=self._on_disconnect,
+            #     timeout=20.0
+            # ) 
+            # await self._client.connect()
+            # self._suppress_disconnect_callbacks = False
+            
+            # Propagate error up so we can just retry normally if needed, or let the caller handle it.
+            # But wait, the original code swallowed the error and retried inside this block.
+            # If we comment this out, we must re-raise or handle the failure.
+            # actually, better to just Re-Raise so the outer loop (if any) or the caller knows it failed.
+            # But `_establish_connection` is called by `connect`. `connect` doesn't loop.
+            # However, `main` in demo loops 3 times. 
+            # So raising the exception is CORRECT.
+            raise e
 
         self._is_connected = True 
         
