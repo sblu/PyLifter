@@ -15,6 +15,7 @@ PyLifter is an open-source Python library and toolkit for controlling **MyLifter
 
 - Python 3.9+
 - `bleak` (Bluetooth Low Energy library)
+- `matplotlib` (Optional: for Cable Robot visualization)
 - Linux (tested) or other OS with BLE support.
 
 ## installation
@@ -100,6 +101,44 @@ Use `UNPAIR` to remove a winch. The system will automatically renumber remaining
 **Soft Limits:**
 If the winch hits a Soft Limit (Error 0x81), the script will pause and ask if you want to override. Type `Y` to proceed past the limit.
 
+
+
+## Cable Robot Demo
+
+The `cable_robot_demo.py` script transforms four individual winches into a coordinated cable-driven parallel robot (CDPR).
+
+### Features
+- **Coordinated Movement**: Synchronized winch speeds for smooth straight-line motion.
+- **Inverse Kinematics**: Calculates cable lengths based on Cartesian (X, Y, Z) targets.
+- **Safety**:
+    - **Safe Zone**: Enforces operating boundaries (Inverted Pyramid) to prevent loose cables or collisions.
+    - **Soft Limits**: Auto-detects and handles soft limit errors interactively.
+- **Visualization**: `V` command launches a real-time 3D plot of the robot state (via `cable_robot_plot.py`).
+
+### System Overview
+
+```mermaid
+graph TD
+    subgraph "Ceiling Frame (Top-Down View)"
+        FL[Winch 1<br>(Front-Left)] --- FR[Winch 2<br>(Front-Right)]
+        FR --- BR[Winch 3<br>(Back-Right)]
+        BR --- BL[Winch 4<br>(Back-Left)]
+        BL --- FL
+    end
+    
+    FL -.-> P(Payload / Lift Point)
+    FR -.-> P
+    BR -.-> P
+    BL -.-> P
+    
+    style P fill:#f9f,stroke:#333,stroke-width:2px
+```
+
+### Usage
+```bash
+python3 PyLifter/cable_robot_demo.py
+```
+(See `?` in the demo for commands like `GOTO`, `TESTPATTERN`, `V`).
 
 ## Firmware Compatibility
 
