@@ -312,6 +312,35 @@ class CableRobot:
         final_y = cy + best_t * (target_y - cy)
         return final_x, final_y
 
+    def find_max_height(self, x, y):
+        """
+        Calculates the maximum safe height Z for a given (x, y) position
+        based on the safe_angle_deg constraint.
+        """
+        # We need: H - z >= dist_to_anchor / tan(angle)
+        # So: z <= H - dist_to_anchor / tan(angle)
+        
+        max_tan = math.tan(math.radians(self.safe_angle_deg))
+        
+        # We must satisfy constraint for ALL anchors.
+        # The constraint is dominated by the anchor FURTHEST from (x,y).
+        max_horiz_dist = 0.0
+        for wid, anchor in self.anchors.items():
+            ax, ay, az = anchor
+            d = math.sqrt((x - ax)**2 + (y - ay)**2)
+            if d > max_horiz_dist:
+                max_horiz_dist = d
+                
+        min_vertical_dist = max_horiz_dist / max_tan
+        
+        # Max Z = Height - min_vertical_dist
+        max_z = self.height - min_vertical_dist
+        
+        # Also respect Ceiling Margin
+        ceiling_limit = self.height - self.min_ceiling_margin
+        
+        return min(max_z, ceiling_limit)
+
     async def _monitor_single_move(self, client, wid, target_pos, direction, speed, abort_event):
         # Trigger simulation movement if applicable
         if self.sim_mode:
@@ -536,6 +565,16 @@ async def main():
             ]
             
             for name, tx, ty, tz in steps:
+                # SPECIAL LOGIC: For Upper Corners, prioritize X/Y even if it means lowering Z.
+                if "Upper" in name:
+                    # Recalculate max safe Z for this X/Y
+                    safe_z = robot.find_max_height(tx, ty)
+                    # Use the lower of the two: the config z_high or the calculated safe_z
+                    # Actually, if safe_z < z_high, we MUST usage safe_z.
+                    # If safe_z > z_high, we utilize z_high (ceiling margin).
+                    # find_max_height already clamps to ceiling margin.
+                    tz = safe_z
+                    
                 if not await run_point(name, tx, ty, tz):
                     print("Test Pattern Aborted.")
                     break
@@ -560,6 +599,7 @@ async def main():
                 script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cable_robot_plot.py")
                 
                 subprocess.Popen([sys.executable, script_path, "--config", args.config, "--pos", pos_str])
+                print("") # Add spacing before next prompt
                 
             except Exception as e:
                 print(f"Error launching visualizer: {e}")

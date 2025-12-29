@@ -38,9 +38,9 @@
             "4": "back_left"
         },
         "safety": {
-            "min_floor_margin_cm": 10.0,
-            "min_ceiling_margin_cm": 30.0,
-            "safe_angle_deg": 70.0
+            "min_floor_margin_cm": 20.0,
+            "min_ceiling_margin_cm": 10.0,
+            "safe_angle_deg": 82.0
         }
     }
 }

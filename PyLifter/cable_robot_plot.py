@@ -57,7 +57,7 @@ def create_robot_plot(robot, current_pos_xyz=None, title_suffix=""):
     # 3. Generate Safe Cloud
     # Optimization: If W/L/H are large, scale step to limit points
     max_dim = max(w, l, h)
-    step = max_dim / 25.0 # Increased density (~25 steps)
+    step = max_dim / 40.0 # (~40 steps)
     
     safe_x = []
     safe_y = []
