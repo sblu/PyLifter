@@ -117,22 +117,7 @@ The `cable_robot_demo.py` script transforms four individual winches into a coord
 
 ### System Overview
 
-```mermaid
-graph TD
-    subgraph "Ceiling Frame (Top-Down View)"
-        FL["Winch 1<br>(Front-Left)"] --- FR["Winch 2<br>(Front-Right)"]
-        FR --- BR["Winch 3<br>(Back-Right)"]
-        BR --- BL["Winch 4<br>(Back-Left)"]
-        BL --- FL
-    end
-    
-    FL -.-> P("Payload / Lift Point")
-    FR -.-> P
-    BR -.-> P
-    BL -.-> P
-    
-    style P fill:#f9f,stroke:#333,stroke-width:2px
-```
+![Cable Robot 3D Workspace](assets/cable_robot_visualizer.png)
 
 ### Usage
 ```bash
