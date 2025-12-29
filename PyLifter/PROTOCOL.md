@@ -76,10 +76,21 @@ Sets a stop point.
 | Name | Value | Description |
 |---|---|---|
 | Reference | 0 | Set Reference Point |
-| Top | 1 | Set Top Stop |
-| Bottom | 2 | Set Bottom Stop |
+| Top | 1 | Set Top Stop (High Limit) |
+| Bottom | 2 | Set Bottom Stop (Soft Limit) |
 
 ### Clear Smart Point (`0x33`)
+Clears a stop point.
+- **Input**:
+    - `calibration_code` (uint8)
+
+## Error Codes
+Common error codes returned in the `error_code` field of the Move response:
+- `0x00`: No Error
+- `0x09`: Sync Error (Device position mismatch)
+- `0x81`: Soft Limit Reached (Warning)
+- `0x83`: Smart Point Not Set
+- `0x86`: Hard Limit / End of Travel
 Clears a stop point.
 - **Input**:
     - `calibration_code` (uint8)

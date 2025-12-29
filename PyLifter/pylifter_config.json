@@ -6,23 +6,41 @@
     "devices": [
         {
             "id": 1,
-            "mac_address": "CC:CC:CC:FE:15:33",
-            "passkey": "2378a8dbc69c"
-        },
-        {
-            "id": 2,
             "mac_address": "CC:CC:CC:FD:D3:48",
             "passkey": "85f14a7953b3"
         },
         {
-            "id": 3,
+            "id": 2,
             "mac_address": "CC:CC:CC:FD:D3:A7",
             "passkey": "11364686966b"
         },
         {
-            "id": 4,
+            "id": 3,
             "mac_address": "CC:CC:CC:FE:13:D9",
             "passkey": "edb380dd340b"
+        },
+        {
+            "id": 4,
+            "mac_address": "CC:CC:CC:FE:15:33",
+            "passkey": "2378a8dbc69c"
         }
-    ]
+    ],
+    "cable_robot": {
+        "dimensions": {
+            "width_cm": 110.0,
+            "length_cm": 85.0,
+            "height_cm": 160.0
+        },
+        "winch_map": {
+            "1": "front_left",
+            "2": "front_right",
+            "3": "back_right",
+            "4": "back_left"
+        },
+        "safety": {
+            "min_floor_margin_cm": 10.0,
+            "min_ceiling_margin_cm": 30.0,
+            "safe_angle_deg": 70.0
+        }
+    }
 }

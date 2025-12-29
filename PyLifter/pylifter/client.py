@@ -368,6 +368,22 @@ class PyLifterClient:
         await self.write_command(packet, response=True)
         return await asyncio.wait_for(self._proto_version_future, timeout=3.0)
 
+    async def set_smart_point(self, point: SmartPointCode):
+        """Sets a smart point (e.g. Soft Limit) at the current position."""
+        if not self._is_connected:
+             raise RuntimeError("Not connected")
+        packet = build_set_smart_point_packet(point)
+        await self.write_command(packet, response=False)
+        logger.info(f"Set Smart Point {point}")
+
+    async def clear_smart_point(self, point: SmartPointCode):
+        """Clears a smart point (e.g. Soft Limit)."""
+        if not self._is_connected:
+             raise RuntimeError("Not connected")
+        packet = build_clear_smart_point_packet(point)
+        await self.write_command(packet, response=False)
+        logger.info(f"Cleared Smart Point {point}")
+
     def _notification_handler(self, sender, data):
         # logger.debug(f"RX: {data.hex()}")
         if not data:
