@@ -76,16 +76,16 @@ def create_robot_plot(robot, current_pos_xyz=None, title_suffix=""):
                     safe_y.append(y)
                     safe_z.append(z)
                     
-    ax.scatter(safe_x, safe_y, safe_z, c='lime', alpha=0.2, s=10, marker='.', label='Safe Zone')
+    ax.scatter(safe_x, safe_y, safe_z, c='blue', alpha=0.2, s=10, marker='.', label='Safe Zone')
     
     # 4. Draw Current Position
     if current_pos_xyz is not None:
         cx, cy, cz = current_pos_xyz
-        ax.scatter([cx], [cy], [cz], c='blue', marker='o', s=100, label='Payload')
+        ax.scatter([cx], [cy], [cz], c='k', marker='o', s=100, label='Payload')
         
         # Draw Cables
         for wid, anchor in robot.anchors.items():
-            ax.plot([anchor[0], cx], [anchor[1], cy], [anchor[2], cz], 'b--', lw=2)
+            ax.plot([anchor[0], cx], [anchor[1], cy], [anchor[2], cz], 'k--', lw=2)
             
     ax.set_xlabel('X (Width)')
     ax.set_ylabel('Y (Length)')
@@ -136,4 +136,8 @@ if __name__ == "__main__":
     create_robot_plot(robot, pos, title_suffix="(Visualizer)")
     
     print("Plot opened. Creating interactive window...")
-    plt.show() # Blocking call for this process
+    try:
+        plt.show() # Blocking call for this process
+    except KeyboardInterrupt:
+        print("\nPlot closed by user.")
+        sys.exit(0)

@@ -210,15 +210,27 @@ class PyLifterClient:
                 
                 # Safety check: if we are trying to move but pos is None (unlikely due to connect wait), we might trigger error.
                 
-                packet = build_move_packet(
-                    self._target_move_code, 
-                    speed=self._target_speed,
-                    avg_pos=pos
-                )
+                # Checks if we need to use GO_OVERRIDE (0x25) or MOVE (0x23)
+                if self._target_move_code in [MoveCode.OVERRIDE_UP, MoveCode.OVERRIDE_DOWN]:
+                    # Map OVERRIDE_UP -> UP (1), OVERRIDE_DOWN -> DOWN (2) for the inner payload
+                    # (Assuming GO_OVERRIDE implies the override nature)
+                    inner_code = MoveCode.UP if self._target_move_code == MoveCode.OVERRIDE_UP else MoveCode.DOWN
+                    
+                    packet = build_override_packet(
+                        inner_code,
+                        speed=self._target_speed,
+                        avg_pos=pos
+                    )
+                else:
+                    packet = build_move_packet(
+                        self._target_move_code, 
+                        speed=self._target_speed,
+                        avg_pos=pos
+                    )
                 
                 if self._client and self._client.is_connected:
                     try:
-                        # logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
+                        logger.debug(f"TX PKT: Move={self._target_move_code}, Speed={self._target_speed}, Pos={pos}")
                         
                         # Only send if lock is available (don't block keep-alive on long ops)
                         if not self._write_lock.locked():

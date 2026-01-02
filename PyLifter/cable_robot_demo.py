@@ -191,32 +191,32 @@ class CableRobot:
                 
         print("Winch initialization complete.")
 
-    async def move_to(self, x, y, z, speed=50):
+    async def move_to(self, x, y, z, speed=50, override_sl=None):
+        # override_sl: List of WIDs to force-move (bypass soft limits), or True for all
+        
         # 1. Check Safety
         safe, msg = self.is_safe(x, y, z)
         if not safe:
             print(f"[SAFETY ERROR] Move Rejected: {msg}")
-            return False
+            return False, {}
 
         # 2. Check Connection Status
         for wid, client in self.clients.items():
             if not client._is_connected:
                 print(f"[CONNECTION ERROR] Move Rejected: Winch {wid} is disconnected.")
-                return False
+                return False, {}
 
-        # 3. Calculate Target Lengths
         # 3. Calculate Target Lengths
         targets = self.inverse_kinematics(x, y, z)
         
-        # 4. Pre-calculate deltas for synchronized speed
-        deltas = {}
+        # 4. Calculate Speeds (Synchronized)
+        # Find max delta to scale speeds
         max_delta = 0.0
+        deltas = {}
         
         for wid, target_len in targets.items():
             if wid in self.clients:
-                client = self.clients[wid]
-                # Ensure we have a valid current distance
-                curr = client.current_distance
+                curr = self.clients[wid].current_distance
                 delta = abs(target_len - curr)
                 deltas[wid] = delta
                 if delta > max_delta:
@@ -238,8 +238,22 @@ class CableRobot:
                 current_pos = client._last_known_position if client._last_known_position is not None else 0
                 
                 current_len = client.current_distance
-                direction = MoveCode.UP if length < current_len else MoveCode.DOWN
-                dir_str = "UP (Retract)" if direction == MoveCode.UP else "DOWN (Extend)"
+                
+                # Determine Direction (Normal or Override)
+                use_override = False
+                if override_sl is True:
+                    use_override = True
+                elif isinstance(override_sl, list) and wid in override_sl:
+                    use_override = True
+                    
+                if length < current_len:
+                    direction = MoveCode.OVERRIDE_UP if use_override else MoveCode.UP
+                    dir_base = "UP (Retract)"
+                else:
+                    direction = MoveCode.OVERRIDE_DOWN if use_override else MoveCode.DOWN
+                    dir_base = "DOWN (Extend)"
+                    
+                dir_str = f"{dir_base} [OVERRIDE]" if use_override else dir_base
                 
                 # Calculate Synchronized Speed
                 delta = deltas.get(wid, 0.0)
@@ -255,28 +269,70 @@ class CableRobot:
                 print(f"  [CMD] Winch {wid}: Length {current_len:.1f}cm -> {length:.1f}cm (Pos {client._last_known_position}->{target_pos}) | {dir_str} | Speed={final_speed}")
                 
                 tasks.append(self._monitor_single_move(client, wid, target_pos, direction, final_speed, abort_event))
-                active_wids.append(wid)
+                active_wids.append((wid, direction))
 
         results = await asyncio.gather(*tasks)
         
         # Check results
-        soft_limit_hit_wids = []
+        soft_limit_hit_info = {} # {wid: direction}
+        hard_limit_wids = []
+        is_hard_limit = False
+
         for i, (success, msg) in enumerate(results):
             if not success and msg == "SOFT_LIMIT":
-                soft_limit_hit_wids.append(active_wids[i])
+                wid, direction = active_wids[i]
+                soft_limit_hit_info[wid] = direction
+            if not success and msg == "HARD_LIMIT":
+                wid, _ = active_wids[i]
+                hard_limit_wids.append(wid)
+                is_hard_limit = True
         
         if abort_event.is_set():
-            print("[EMERGENCY STOP] Movement aborted due to winch disconnection.")
-            return False, []
+            if is_hard_limit:
+                print(f"[ERROR] Movement stopped due to Hard Limit (End of Travel) on Winch(es): {hard_limit_wids}")
+            else:
+                print("[EMERGENCY STOP] Movement aborted due to winch disconnection.")
+            return False, {}
             
-        if soft_limit_hit_wids:
-            print(f"[WARNING] Movement stopped due to Soft Limit on Winches: {soft_limit_hit_wids}")
-            return False, soft_limit_hit_wids
+        if soft_limit_hit_info:
+            # Format info for display: "Winch X (Top), Winch Y (Bottom)"
+            # MoveCode is imported globally
+            info_strs = []
+            for wid, direction in soft_limit_hit_info.items():
+                limit_name = "Top" if direction == MoveCode.UP else "Bottom"
+                info_strs.append(f"Winch {wid} ({limit_name})")
+            
+            print(f"[WARNING] Movement stopped due to Soft Limit on: {', '.join(info_strs)}")
+            return False, soft_limit_hit_info
             
         print("Move Complete.")
         self.last_target = (x, y, z)
-        return True, []
+        return True, {}
 
+    async def nudge_override(self, wids_dict, duration=1.0):
+        """
+        Performs a blind 'nudge' using Override commands for a short duration.
+        Used to move past soft limits when regular moves are rejected.
+        wids_dict: {wid: MoveCode.OVERRIDE_UP/DOWN}
+        """
+        print(f"  [NUDGE] Forcing movement for {duration}s on {list(wids_dict.keys())}...")
+        
+        # Start Move
+        for wid, direction in wids_dict.items():
+            if wid in self.clients:
+                # Bypass move() logic to avoid monitor checks
+                self.clients[wid]._target_speed = 60 # Safe slow-ish speed
+                self.clients[wid]._target_move_code = direction
+        
+        await asyncio.sleep(duration)
+        
+        # Stop
+        for wid in wids_dict.keys():
+            if wid in self.clients:
+                await self.clients[wid].stop()
+        
+        print("  [NUDGE] Complete.")
+    
     def find_safe_boundary(self, target_x, target_y, z):
         """
         Finds the furthest safe point on the line from Center to (target_x, target_y) at height z.
@@ -349,6 +405,7 @@ class CableRobot:
             
         # Hardware move command
         if not self.sim_mode:
+            client.last_error_code = 0 # Clear stale errors
             await client.move(direction, speed=speed)
         
         try:
@@ -365,8 +422,16 @@ class CableRobot:
                 
                 # Check for errors (Sim or Real)
                 if client.last_error_code == 0x81:
+                    is_override = (direction == MoveCode.OVERRIDE_UP or direction == MoveCode.OVERRIDE_DOWN)
+                    if not is_override:
                         print(f"  [ERROR] Winch {wid}: Soft Limit Reached (0x81)!")
                         return False, "SOFT_LIMIT"
+                    # Else: Ignore 0x81 during override
+                
+                if client.last_error_code == 0x86:
+                        print(f"  [ERROR] Winch {wid}: Hard Limit / End of Travel (0x86)!")
+                        abort_event.set() # Stop other winches immediately
+                        return False, "HARD_LIMIT"
                 
                 current_pos = client._last_known_position
                 if current_pos is None: break
@@ -398,7 +463,29 @@ async def main():
     parser = argparse.ArgumentParser(description="Cable Robot Interactive Demo")
     parser.add_argument("--config", default="pylifter_config.json", help="Config file path")
     parser.add_argument("--sim", action="store_true", help="Run in simulation mode (no hardware)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
+
+    if args.debug:
+        print("Debug logging enabled (writing to debug.log)...")
+        # Configure Root Logger to capture everything
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)
+        
+        # 1. Update existing Console Handler to filtered INFO
+        for handler in root_logger.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                handler.setLevel(logging.INFO)
+        
+        # 2. Add File Handler for DEBUG
+        fh = logging.FileHandler("debug.log", mode='w')
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s:%(name)s: %(message)s'))
+        root_logger.addHandler(fh)
+        
+        # Set modules to DEBUG
+        logging.getLogger("pylifter").setLevel(logging.DEBUG)
+        logging.getLogger("cable_robot").setLevel(logging.DEBUG)
 
     # Load Config
     if not os.path.exists(args.config):
@@ -509,39 +596,68 @@ async def main():
             w, l = robot.width, robot.length
             cx, cy = w/2.0, l/2.0
             
+            try:
+                pattern_speed = int(parts[1]) if len(parts) > 1 else 100
+            except ValueError:
+                print("Invalid speed provided. Using default 100.")
+                pattern_speed = 100
+
             # Helper to generate waypoint
-            async def run_point(name, tx, ty, tz):
+            async def run_point(name, tx, ty, tz, speed_val):
                 # Clamp to safe zone
                 sx, sy = robot.find_safe_boundary(tx, ty, tz)
                 print(f"--> Waypoint: {name} ({sx:.1f}, {sy:.1f}, {tz:.1f})")
                 
-                success, failed_wids = await robot.move_to(sx, sy, tz, speed=100)
+                success, failed_wids = await robot.move_to(sx, sy, tz, speed=speed_val)
                 
                 # Check for Soft Limit Failure logic
                 if not success and failed_wids: 
-                    # Only catch if failure was strictly due to soft limits (failed_wids not empty)
-                    # If failed_wids is empty but success is False (e.g. Safety/Conn), we just stop.
+                    # failed_wids is now a dict {wid: direction}
                     
-                    print(f"    [!] Movement to {name} incomplete. Soft Limit on: {failed_wids}")
+                    # MoveCode is imported globally
+                    info_strs = []
+                    for wid, direction in failed_wids.items():
+                        limit_name = "Top" if direction == MoveCode.UP else "Bottom"
+                        info_strs.append(f"Winch {wid} ({limit_name})")
+                        
+                    print(f"    [!] Movement to {name} incomplete. Soft Limit on: {', '.join(info_strs)}")
                     val = await asyncio.get_event_loop().run_in_executor(None, input, "    Soft limit hit? Expand limits? (Y/N): ")
                     if val.lower() == 'y':
-                        print(f"    Expanding Limits on Winches {failed_wids}...")
+                        print(f"    Expanding Limits on Winches {list(failed_wids.keys())}...")
                         from pylifter.protocol import SmartPointCode
                         
-                        # 1. Clear Bottom Limits ONLY on failed winches
-                        for wid in failed_wids:
+                        # 1. Determine which limits to update AFTER the move
+                        points_to_set = {} # {wid: point_code}
+                        
+                        for wid, direction in failed_wids.items():
+                            # If we were moving UP (Retract) -> New Top Limit
+                            if direction == MoveCode.UP:
+                                points_to_set[wid] = SmartPointCode.TOP
+                            else:
+                                points_to_set[wid] = SmartPointCode.BOTTOM
+
+                        print("    Clearing Limits on failed winches...")
+                        from pylifter.protocol import SmartPointCode
+                        
+                        # 2. Clear Limits
+                        for wid in failed_wids.keys():
                             if wid in robot.clients:
+                                print(f"    [Winch {wid}] Clearing Soft Limits (Top & Bottom)...")
+                                await robot.clients[wid].clear_smart_point(SmartPointCode.TOP)
                                 await robot.clients[wid].clear_smart_point(SmartPointCode.BOTTOM)
                         
-                        print("    Limits Cleared. Retrying Move...")
-                        success, _ = await robot.move_to(sx, sy, tz, speed=100)
+                        await asyncio.sleep(1.0)
+                        
+                        # 3. Retry Standard Move
+                        print("    Limits Cleared. Retrying Standard Move...")
+                        success, _ = await robot.move_to(sx, sy, tz, speed=speed_val)
                         
                         if success:
                             print("    Move Successful. Setting new Soft Limits...")
-                            # 2. Set New Bottom Limits ONLY on failed winches
-                            for wid in failed_wids:
+                            # 4. Set New Limits
+                            for wid, pt in points_to_set.items():
                                 if wid in robot.clients:
-                                     await robot.clients[wid].set_smart_point(SmartPointCode.BOTTOM)
+                                     await robot.clients[wid].set_smart_point(pt)
                             print("    New Limits Set.")
                         else:
                             print("    Retry failed even after clearing limits.")
@@ -575,7 +691,7 @@ async def main():
                     # find_max_height already clamps to ceiling margin.
                     tz = safe_z
                     
-                if not await run_point(name, tx, ty, tz):
+                if not await run_point(name, tx, ty, tz, pattern_speed):
                     print("Test Pattern Aborted.")
                     break
             

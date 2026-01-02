@@ -123,7 +123,12 @@ The `cable_robot_demo.py` script transforms four individual winches into a coord
 ```bash
 python3 PyLifter/cable_robot_demo.py
 ```
-(See `?` in the demo for commands like `GOTO`, `TESTPATTERN`, `V`).
+(See `?` in the demo for full command list).
+
+**Common Commands:**
+- `GOTO X Y Z [SPEED]`: Move to coordinates.
+- `TESTPATTERN [SPEED]`: Run a verification sequence (default speed 100).
+- `V`: Launch 3D visualizer (Safe Zone=Blue, Payload=Black).
 
 ## Firmware Compatibility
 

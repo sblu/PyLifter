@@ -69,6 +69,15 @@ def build_move_packet(move_code: MoveCode, speed: int = 100, avg_pos: int = 0) -
     payload = struct.pack("<BBi", move_code, speed, avg_pos)
     return build_packet(CommandCode.MOVE, payload)
 
+def build_override_packet(move_code: MoveCode, speed: int = 100, avg_pos: int = 0) -> bytes:
+    """
+    Constructs an Override command packet.
+    Payload: [Move Code (1B)][Speed (1B)][Avg Pos (4B, Little Endian)]
+    Uses CommandCode.GO_OVERRIDE (0x25) instead of MOVE.
+    """
+    payload = struct.pack("<BBi", move_code, speed, avg_pos)
+    return build_packet(CommandCode.GO_OVERRIDE, payload)
+
 def build_set_smart_point_packet(point: SmartPointCode) -> bytes:
     """
     Constructs a Calibrate (Set Smart Point) command packet.

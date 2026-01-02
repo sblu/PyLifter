@@ -27,8 +27,8 @@
     ],
     "cable_robot": {
         "dimensions": {
-            "width_cm": 110.0,
-            "length_cm": 85.0,
+            "width_cm": 95.0,
+            "length_cm": 65.0,
             "height_cm": 160.0
         },
         "winch_map": {
@@ -39,7 +39,7 @@
         },
         "safety": {
             "min_floor_margin_cm": 20.0,
-            "min_ceiling_margin_cm": 10.0,
+            "min_ceiling_margin_cm": 30.0,
             "safe_angle_deg": 82.0
         }
     }
